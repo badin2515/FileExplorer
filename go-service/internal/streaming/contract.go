@@ -29,13 +29,17 @@ const (
 type StreamMode int
 
 const (
-	// ModeDownload streams the entire file (length = 0 or file size)
+	// ModeDownload streams the entire file from offset 0 (or requested offset) to EOF.
+	// Triggered when Length == 0.
 	ModeDownload StreamMode = iota
 
-	// ModePreview streams a limited portion for preview purposes
+	// ModePreview streams a limited portion of the file for preview purposes.
+	// Triggered when Length > 0 and Length <= MaxPreviewSize.
+	// Server guarantees to stop streaming after Length bytes.
 	ModePreview
 
-	// ModeRange streams a specific byte range
+	// ModeRange streams a specific byte range.
+	// Triggered when Length > MaxPreviewSize (explicit range request).
 	ModeRange
 )
 
@@ -50,11 +54,24 @@ type StreamRequest struct {
 }
 
 // ParseStreamRequest determines the streaming mode and validates the request
+//
 // Contract:
-//   - length = 0 -> Download (full file)
-//   - length > 0 && length <= MaxPreviewSize -> Preview
-//   - length > MaxPreviewSize -> Range download
-//   - offset > 0 -> Resume/Range
+//
+//  1. Full Download:
+//     - Input: length = 0
+//     - Behavior: Streams from offset to end of file.
+//
+//  2. Preview:
+//     - Input: length > 0 && length <= MaxPreviewSize (5MB)
+//     - Behavior: Streams exactly 'length' bytes (or until EOF).
+//
+//  3. Range Request:
+//     - Input: length > MaxPreviewSize
+//     - Behavior: Streams exactly 'length' bytes (explicit range).
+//
+//  4. Resume/Seek:
+//     - Input: offset > 0
+//     - Behavior: Starts reading from 'offset'. Combined with above modes.
 func ParseStreamRequest(path string, offset, length int64, chunkSize int, mimeType string) (*StreamRequest, error) {
 	req := &StreamRequest{
 		Path:      path,
@@ -70,21 +87,16 @@ func ParseStreamRequest(path string, offset, length int64, chunkSize int, mimeTy
 		req.ChunkSize = 1024 * 1024 // Max 1MB chunks
 	}
 
-	// Determine mode
+	// Determine mode based on contract
 	if length == 0 {
 		req.Mode = ModeDownload
-		req.Length = 0 // Will be set to file size
+		req.Length = 0 // Will be set to file size by caller
 	} else if length <= MaxPreviewSize {
 		req.Mode = ModePreview
 		req.Length = length
 	} else {
 		req.Mode = ModeRange
 		req.Length = length
-	}
-
-	// If offset is specified, treat as range request
-	if offset > 0 && length > 0 {
-		req.Mode = ModeRange
 	}
 
 	return req, nil

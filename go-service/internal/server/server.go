@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/user/filenode/internal/errors"
 	"github.com/user/filenode/internal/fs"
 	"github.com/user/filenode/internal/security"
 	"github.com/user/filenode/internal/streaming"
@@ -70,7 +71,7 @@ func (s *FileNodeServer) toRealPath(virtualPath string) (string, error) {
 	// Validate the real path for security
 	cleanPath, err := security.ValidatePath(realPath)
 	if err != nil {
-		return "", status.Error(codes.PermissionDenied, err.Error())
+		return "", status.Error(codes.PermissionDenied, errors.ErrOutsideRoot)
 	}
 
 	return cleanPath, nil
@@ -105,19 +106,19 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 	info, err := os.Stat(realPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return status.Error(codes.NotFound, "path not found")
+			return status.Error(codes.NotFound, errors.ErrNotFound)
 		}
-		return status.Error(codes.Internal, err.Error())
+		return status.Error(codes.Internal, errors.ErrInternal)
 	}
 
 	if !info.IsDir() {
-		return status.Error(codes.InvalidArgument, "path is not a directory")
+		return status.Error(codes.InvalidArgument, errors.ErrInvalidArg)
 	}
 
 	// Read directory
 	entries, err := os.ReadDir(realPath)
 	if err != nil {
-		return status.Error(codes.PermissionDenied, err.Error())
+		return status.Error(codes.PermissionDenied, errors.ErrPermission)
 	}
 
 	// Determine page size
@@ -136,6 +137,8 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		var offset int
 		if _, parseErr := parsePageToken(req.PageToken, &offset); parseErr == nil {
 			startIndex = offset
+		} else {
+			return status.Error(codes.InvalidArgument, errors.ErrPageToken)
 		}
 	}
 
@@ -249,7 +252,7 @@ func (s *FileNodeServer) Stat(ctx context.Context, req *pb.StatRequest) (*pb.Fil
 	info, err := os.Stat(realPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, status.Error(codes.NotFound, "path not found")
+			return nil, status.Error(codes.NotFound, errors.ErrNotFound)
 		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -291,7 +294,7 @@ func (s *FileNodeServer) Stat(ctx context.Context, req *pb.StatRequest) (*pb.Fil
 func (s *FileNodeServer) GetDrives(ctx context.Context, req *pb.Empty) (*pb.DriveList, error) {
 	realDrives, err := fs.GetDrives()
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, errors.ErrInternal)
 	}
 
 	// Convert to virtual paths
@@ -336,7 +339,7 @@ func (s *FileNodeServer) CreateDir(ctx context.Context, req *pb.CreateDirRequest
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   err.Error(),
-			ErrorCode: "PERMISSION_DENIED",
+			ErrorCode: errors.ErrPermission,
 		}, nil
 	}
 
@@ -354,7 +357,7 @@ func (s *FileNodeServer) CreateDir(ctx context.Context, req *pb.CreateDirRequest
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   err.Error(),
-			ErrorCode: "CREATE_FAILED",
+			ErrorCode: "CREATE_FAILED", // TODO: Normalize create error
 		}, nil
 	}
 
@@ -372,7 +375,7 @@ func (s *FileNodeServer) CreateFile(ctx context.Context, req *pb.CreateFileReque
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   err.Error(),
-			ErrorCode: "PERMISSION_DENIED",
+			ErrorCode: errors.ErrPermission,
 		}, nil
 	}
 
@@ -384,7 +387,7 @@ func (s *FileNodeServer) CreateFile(ctx context.Context, req *pb.CreateFileReque
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   "File already exists",
-			ErrorCode: "ALREADY_EXISTS",
+			ErrorCode: errors.ErrAlreadyExists,
 		}, nil
 	}
 
@@ -423,7 +426,7 @@ func (s *FileNodeServer) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb
 			return &pb.OperationResult{
 				Success:   false,
 				Message:   err.Error(),
-				ErrorCode: "PERMISSION_DENIED",
+				ErrorCode: errors.ErrPermission,
 			}, nil
 		}
 
@@ -449,6 +452,13 @@ func (s *FileNodeServer) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb
 		security.ReleaseFileLock(realPath)
 
 		if err != nil {
+			if strings.Contains(err.Error(), "process cannot access") {
+				return &pb.OperationResult{
+					Success:   false,
+					Message:   err.Error(),
+					ErrorCode: errors.ErrFileLocked,
+				}, nil
+			}
 			return &pb.OperationResult{
 				Success:   false,
 				Message:   err.Error(),
@@ -472,7 +482,7 @@ func (s *FileNodeServer) Rename(ctx context.Context, req *pb.RenameRequest) (*pb
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   err.Error(),
-			ErrorCode: "PERMISSION_DENIED",
+			ErrorCode: errors.ErrPermission,
 		}, nil
 	}
 
@@ -482,7 +492,7 @@ func (s *FileNodeServer) Rename(ctx context.Context, req *pb.RenameRequest) (*pb
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   validateErr.Error(),
-			ErrorCode: "PERMISSION_DENIED",
+			ErrorCode: errors.ErrPermission,
 		}, nil
 	}
 
@@ -498,11 +508,18 @@ func (s *FileNodeServer) Rename(ctx context.Context, req *pb.RenameRequest) (*pb
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   "Target already exists",
-			ErrorCode: "ALREADY_EXISTS",
+			ErrorCode: errors.ErrAlreadyExists,
 		}, nil
 	}
 
 	if renameErr := os.Rename(oldRealPath, newRealPath); renameErr != nil {
+		if strings.Contains(renameErr.Error(), "process cannot access") {
+			return &pb.OperationResult{
+				Success:   false,
+				Message:   renameErr.Error(),
+				ErrorCode: errors.ErrFileLocked,
+			}, nil
+		}
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   renameErr.Error(),
@@ -535,9 +552,9 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 	f, err := os.Open(realPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return status.Error(codes.NotFound, "file not found")
+			return status.Error(codes.NotFound, errors.ErrNotFound)
 		}
-		return status.Error(codes.PermissionDenied, err.Error())
+		return status.Error(codes.PermissionDenied, errors.ErrPermission)
 	}
 	defer f.Close()
 
@@ -547,7 +564,7 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 	}
 
 	if info.IsDir() {
-		return status.Error(codes.InvalidArgument, "cannot stream a directory")
+		return status.Error(codes.InvalidArgument, errors.ErrInvalidArg)
 	}
 
 	totalSize := info.Size()
@@ -557,24 +574,24 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 	// Parse stream request using contract
 	streamReq, err := streaming.ParseStreamRequest(req.Path, req.Offset, req.Length, int(req.ChunkSize), mimeType)
 	if err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
+		return status.Error(codes.InvalidArgument, errors.ErrInvalidArg)
 	}
 
 	// Handle resume token
 	if req.ResumeToken != "" {
 		tokenPath, tokenOffset, tokenErr := security.ValidateResumeToken(req.ResumeToken)
 		if tokenErr != nil {
-			return status.Error(codes.InvalidArgument, "invalid resume token")
+			return status.Error(codes.InvalidArgument, errors.ErrInvalidResume)
 		}
 		if tokenPath != req.Path {
-			return status.Error(codes.InvalidArgument, "resume token path mismatch")
+			return status.Error(codes.InvalidArgument, errors.ErrInvalidResume)
 		}
 		offset = tokenOffset
 	}
 
 	// Validate offset
 	if err := security.ValidateOffset(offset, totalSize); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
+		return status.Error(codes.InvalidArgument, errors.ErrOffset)
 	}
 
 	// Seek to offset
