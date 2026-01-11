@@ -5,6 +5,7 @@ import '../../core/grpc/client.dart';
 import 'widgets/file_list.dart';
 import 'widgets/sidebar.dart';
 import 'widgets/toolbar.dart';
+import 'widgets/preview_panel.dart';
 import 'providers/explorer_provider.dart';
 
 class ExplorerScreen extends ConsumerStatefulWidget {
@@ -49,6 +50,15 @@ class _ExplorerScreenState extends ConsumerState<ExplorerScreen> {
                 const Expanded(
                   child: FileListPanel(),
                 ),
+
+                // Vertical divider
+                Container(
+                  width: 1,
+                  color: Theme.of(context).dividerColor,
+                ),
+
+                // Preview Panel
+                const PreviewPanel(),
               ],
             ),
           ),

@@ -26,3 +26,10 @@ Thumbs.db
 
 # Temp
 *.tmp
+
+# Tauri / Node
+tauri-ui/node_modules/
+tauri-ui/src-tauri/target/
+tauri-ui/out/
+tauri-ui/dist/
+*.lock

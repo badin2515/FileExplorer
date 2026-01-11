@@ -60,10 +60,17 @@ func NewFileNodeServer() *FileNodeServer {
 	mapper := vpath.GetMapper()
 
 	// Auto-mount available drives
-	drives, _ := fs.GetDrives()
-	for _, drive := range drives {
-		letter := strings.ToLower(string(drive.Name[0]))
-		mapper.Mount("/drive_"+letter, drive.Path)
+	drives, err := fs.GetDrives()
+	if err != nil {
+		fmt.Printf("Error detecting drives: %v\n", err)
+	} else {
+		fmt.Printf("Detected %d drives:\n", len(drives))
+		for _, drive := range drives {
+			letter := strings.ToLower(string(drive.Name[0]))
+			mountPoint := "/drive_" + letter
+			fmt.Printf(" - Mounting %s -> %s\n", mountPoint, drive.Path)
+			mapper.Mount(mountPoint, drive.Path)
+		}
 	}
 
 	return &FileNodeServer{

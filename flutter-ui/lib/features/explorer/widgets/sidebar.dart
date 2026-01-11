@@ -133,24 +133,25 @@ class ExplorerSidebar extends ConsumerWidget {
   }
   
   // Platform-specific paths (Windows)
+  // mapped to Virtual Paths: /drive_c mapped to C:\
   static String _getHomePath() {
     final user = _getUserName();
-    return 'C:\\Users\\$user';
+    return '/drive_c/Users/$user';
   }
   
   static String _getDocumentsPath() {
     final user = _getUserName();
-    return 'C:\\Users\\$user\\Documents';
+    return '/drive_c/Users/$user/Documents';
   }
   
   static String _getDownloadsPath() {
     final user = _getUserName();
-    return 'C:\\Users\\$user\\Downloads';
+    return '/drive_c/Users/$user/Downloads';
   }
   
   static String _getDesktopPath() {
     final user = _getUserName();
-    return 'C:\\Users\\$user\\Desktop';
+    return '/drive_c/Users/$user/Desktop';
   }
   
   static String _getUserName() {

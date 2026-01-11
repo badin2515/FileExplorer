@@ -148,43 +148,63 @@ class ExplorerNotifier extends StateNotifier<ExplorerState> {
   }
 
   /// Navigate to a path
-  Future<void> navigateTo(String path) async {
-    state = state.copyWith(isLoading: true, error: null, selectedPaths: {});
+  Future<void> navigateTo(String path, {bool clearStack = true}) async {
+    // Normalize path to use /
+    final normalizedPath = path.replaceAll('\\', '/');
+    state = state.copyWith(
+      isLoading: true, 
+      error: null, 
+      selectedPaths: {},
+      currentPath: normalizedPath,
+      files: [], // Clear current files
+    );
+    
+    await _loadPage(0);
+  }
+
+  /// Load specific page offset
+  Future<void> _loadPage(int offset) async {
+    if (state.currentPath == null) return;
     
     try {
-      final files = <FileEntryModel>[];
-      
+      final newFiles = <FileEntryModel>[];
+      // Default page size 500 matching server
+      const pageSize = 500;
+       
       await for (final entry in _client.listDir(
-        path,
+        state.currentPath!,
+        pageSize: pageSize,
+        pageToken: offset.toString(),
         showHidden: state.showHidden,
         sortBy: _mapSortBy(state.sortBy),
         sortOrder: _mapSortOrder(state.sortOrder),
       )) {
-        files.add(FileEntryModel(
-          id: entry.id,
-          name: entry.name,
-          path: entry.path,
-          displayPath: entry.displayPath,
-          isDir: entry.isDir,
-          size: entry.size.toInt(),
-          modifiedAt: DateTime.fromMillisecondsSinceEpoch(entry.modifiedAt.toInt()),
-          extension: entry.extension_8,
-          mimeType: entry.mimeType,
-          isHidden: entry.isHidden,
-          isReadonly: entry.isReadonly,
-        ));
+         newFiles.add(_mapFileEntry(entry));
       }
-      
+
       state = state.copyWith(
-        currentPath: path,
-        files: files,
+        files: [...state.files, ...newFiles],
         isLoading: false,
       );
+      
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
-        error: 'Failed to load directory: $e',
+        error: _mapError(e),
       );
+    }
+  }
+
+  /// Load more items (Infinite Scroll)
+  Future<void> loadMore() async {
+    if (state.isLoading) return; // Prevent duplicate requests
+    if (state.currentPath == null) return;
+    
+    // Simple logic: If we have multiple of 500 items, assume there might be more
+    if (state.files.length % 500 == 0 && state.files.isNotEmpty) {
+      // Need to show loading indicator at bottom? 
+      // For now just load.
+      await _loadPage(state.files.length);
     }
   }
 
@@ -203,6 +223,11 @@ class ExplorerNotifier extends StateNotifier<ExplorerState> {
     if (state.currentPath != null) {
       await navigateTo(state.currentPath!);
     }
+  }
+
+  /// Select single file (clear others)
+  void selectSingle(String path) {
+    state = state.copyWith(selectedPaths: {path});
   }
 
   /// Toggle file selection
@@ -247,7 +272,7 @@ class ExplorerNotifier extends StateNotifier<ExplorerState> {
   Future<bool> createFolder(String name) async {
     if (state.currentPath == null) return false;
     
-    final path = '${state.currentPath}\\$name';
+    final path = '${state.currentPath}/$name';
     final result = await _client.createDir(path);
     
     if (result.success) {
@@ -261,7 +286,7 @@ class ExplorerNotifier extends StateNotifier<ExplorerState> {
   Future<bool> createFile(String name) async {
     if (state.currentPath == null) return false;
     
-    final path = '${state.currentPath}\\$name';
+    final path = '${state.currentPath}/$name';
     final result = await _client.createFile(path);
     
     if (result.success) {
@@ -299,15 +324,42 @@ class ExplorerNotifier extends StateNotifier<ExplorerState> {
   }
 
   // Helper methods
+  FileEntryModel _mapFileEntry(pb.FileEntry entry) {
+    return FileEntryModel(
+      id: entry.id,
+      name: entry.name,
+      path: entry.path,
+      displayPath: entry.displayPath,
+      isDir: entry.isDir,
+      size: entry.size.toInt(),
+      modifiedAt: DateTime.fromMillisecondsSinceEpoch(entry.modifiedAt.toInt()),
+      extension: entry.extension_8,
+      mimeType: entry.mimeType,
+      isHidden: entry.isHidden,
+      isReadonly: entry.isReadonly,
+    );
+  }
+
+  String _mapError(dynamic e) {
+    final str = e.toString();
+    if (str.contains('ERR_PERMISSION_DENIED')) return 'Permission Denied';
+    if (str.contains('ERR_NOT_FOUND')) return 'File Not Found';
+    if (str.contains('ERR_FILE_LOCKED')) return 'File is In Use';
+    if (str.contains('ERR_OUTSIDE_ROOT')) return 'Access Denied';
+    return str;
+  }
+
   String? _getParentPath(String path) {
-    // Handle Windows paths
-    if (path.length <= 3) return null; // Root drive like "C:\"
+    // Virtual Path logic: /drive_c/Users -> /drive_c
+    if (path == '/' || !path.contains('/')) return null;
     
-    final normalized = path.replaceAll('/', '\\');
-    final lastSep = normalized.lastIndexOf('\\');
-    if (lastSep <= 2) return '${normalized.substring(0, 3)}';
+    final parts = path.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return null;
     
-    return normalized.substring(0, lastSep);
+    parts.removeLast();
+    if (parts.isEmpty) return null; // Don't allow going to root /, stay at drive root
+    
+    return '/' + parts.join('/');
   }
 
   // Proto enum mappings

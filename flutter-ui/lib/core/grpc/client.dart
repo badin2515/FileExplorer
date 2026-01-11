@@ -44,12 +44,16 @@ class FileNodeGrpcClient {
     bool showHidden = false,
     SortBy sortBy = SortBy.SORT_NAME,
     SortOrder sortOrder = SortOrder.ASC,
+    int pageSize = 1000,
+    String pageToken = '',
   }) {
     return _stub.listDir(ListDirRequest(
       path: path,
       showHidden: showHidden,
       sortBy: sortBy,
       sortOrder: sortOrder,
+      pageSize: pageSize,
+      pageToken: pageToken,
     ));
   }
   

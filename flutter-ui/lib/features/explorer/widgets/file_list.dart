@@ -5,11 +5,69 @@ import 'package:intl/intl.dart';
 
 import '../providers/explorer_provider.dart';
 
-class FileListPanel extends ConsumerWidget {
+class FileListPanel extends ConsumerStatefulWidget {
   const FileListPanel({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FileListPanel> createState() => _FileListPanelState();
+}
+
+class _FileListPanelState extends ConsumerState<FileListPanel> {
+  final ScrollController _scrollController = ScrollController();
+  
+  // Double-tap implementation
+  int? _lastTapTime;
+  String? _lastTapPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      ref.read(explorerProvider.notifier).loadMore();
+    }
+  }
+  
+  void _handleTap(FileEntryModel file, ExplorerNotifier notifier, bool isCtrlPressed) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    
+    // Check for double tap
+    if (_lastTapPath == file.path && 
+        _lastTapTime != null && 
+        (now - _lastTapTime! < 300)) { // 300ms threshold
+      
+      // Double tap detected
+      if (file.isDir) {
+        notifier.navigateTo(file.path);
+      }
+      // TODO: Open file
+      
+      _lastTapTime = null; // Reset
+      return;
+    }
+    
+    // Single tap logic (Selection)
+    _lastTapPath = file.path;
+    _lastTapTime = now;
+    
+    if (isCtrlPressed) {
+      notifier.toggleSelection(file.path);
+    } else {
+      notifier.selectSingle(file.path);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(explorerProvider);
     final notifier = ref.read(explorerProvider.notifier);
     
@@ -76,24 +134,7 @@ class FileListPanel extends ConsumerWidget {
           ),
           child: Row(
             children: [
-              SizedBox(
-                width: 24,
-                child: Checkbox(
-                  value: state.selectedPaths.length == state.files.length,
-                  tristate: state.selectedPaths.isNotEmpty &&
-                      state.selectedPaths.length < state.files.length,
-                  onChanged: (value) {
-                    if (value == true) {
-                      notifier.selectAll();
-                    } else {
-                      notifier.clearSelection();
-                    }
-                  },
-                ),
-              ),
-              const SizedBox(width: 16),
-              const SizedBox(width: 24), // Icon space
-              const SizedBox(width: 12),
+              const SizedBox(width: 48), // Space for icon matching list item
               Expanded(
                 flex: 3,
                 child: Text(
@@ -129,36 +170,48 @@ class FileListPanel extends ConsumerWidget {
         
         // File list
         Expanded(
-          child: ListView.builder(
-            itemCount: state.files.length,
-            itemBuilder: (context, index) {
-              final file = state.files[index];
-              final isSelected = state.selectedPaths.contains(file.path);
-              
-              return _FileListItem(
-                file: file,
-                isSelected: isSelected,
-                onTap: () {
-                  if (file.isDir) {
-                    notifier.navigateTo(file.path);
-                  } else {
-                    notifier.toggleSelection(file.path);
-                  }
-                },
-                onDoubleTap: () {
-                  if (file.isDir) {
-                    notifier.navigateTo(file.path);
-                  }
-                  // TODO: Open file
-                },
-                onCheckboxChanged: (value) {
-                  notifier.toggleSelection(file.path);
-                },
-                onContextMenu: (offset) {
-                  _showContextMenu(context, offset, file, notifier);
-                },
-              );
+          child: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.keyA, control: true): () => notifier.selectAll(),
+              const SingleActivator(LogicalKeyboardKey.escape): () => notifier.clearSelection(),
             },
+            child: Focus(
+              autofocus: true,
+              child: ListView.builder(
+                controller: _scrollController,
+                itemCount: state.files.length + (state.isLoading ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index == state.files.length) {
+                    return const Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+                  final file = state.files[index];
+                  final isSelected = state.selectedPaths.contains(file.path);
+                  
+                  return _FileListItem(
+                    file: file,
+                    isSelected: isSelected,
+                    onTap: () {
+                      final isCtrlPressed = HardwareKeyboard.instance.logicalKeysPressed
+                          .contains(LogicalKeyboardKey.controlLeft) || 
+                          HardwareKeyboard.instance.logicalKeysPressed
+                          .contains(LogicalKeyboardKey.controlRight);
+
+                      _handleTap(file, notifier, isCtrlPressed);
+                    },
+                    onContextMenu: (offset) {
+                      // Select if not already selected
+                      if (!isSelected) {
+                        notifier.selectSingle(file.path);
+                      }
+                      _showContextMenu(context, offset, file, notifier);
+                    },
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ],
@@ -189,7 +242,7 @@ class FileListPanel extends ConsumerWidget {
             }
           },
         ),
-        const PopupMenuDivider<void>(),
+        const PopupMenuDivider(),
         PopupMenuItem<void>(
           child: const Row(
             children: [
@@ -214,7 +267,7 @@ class FileListPanel extends ConsumerWidget {
             // TODO: Cut to clipboard
           },
         ),
-        const PopupMenuDivider<void>(),
+        const PopupMenuDivider(),
         PopupMenuItem<void>(
           child: const Row(
             children: [
@@ -238,7 +291,6 @@ class FileListPanel extends ConsumerWidget {
             ],
           ),
           onTap: () {
-            notifier.toggleSelection(file.path);
             notifier.deleteSelected();
           },
         ),
@@ -289,16 +341,12 @@ class _FileListItem extends StatelessWidget {
   final FileEntryModel file;
   final bool isSelected;
   final VoidCallback onTap;
-  final VoidCallback onDoubleTap;
-  final ValueChanged<bool?> onCheckboxChanged;
   final void Function(Offset) onContextMenu;
 
   const _FileListItem({
     required this.file,
     required this.isSelected,
     required this.onTap,
-    required this.onDoubleTap,
-    required this.onCheckboxChanged,
     required this.onContextMenu,
   });
 
@@ -308,24 +356,17 @@ class _FileListItem extends StatelessWidget {
       onSecondaryTapUp: (details) => onContextMenu(details.globalPosition),
       child: Material(
         color: isSelected 
-            ? Theme.of(context).colorScheme.primary.withOpacity(0.1)
+            ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
             : Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          onDoubleTap: onDoubleTap,
+          splashFactory: NoSplash.splashFactory,
           child: Container(
             height: 36,
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                SizedBox(
-                  width: 24,
-                  child: Checkbox(
-                    value: isSelected,
-                    onChanged: onCheckboxChanged,
-                  ),
-                ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 8),
                 SizedBox(
                   width: 24,
                   child: Icon(
@@ -334,13 +375,16 @@ class _FileListItem extends StatelessWidget {
                     color: _getIconColor(context),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 16),
                 Expanded(
                   flex: 3,
                   child: Text(
                     file.name,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: file.isHidden ? Colors.grey[600] : Colors.grey[200],
+                      color: isSelected 
+                          ? Theme.of(context).colorScheme.primary
+                          : (file.isHidden ? Colors.grey[600] : Colors.grey[200]),
+                      fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -349,7 +393,9 @@ class _FileListItem extends StatelessWidget {
                   child: Text(
                     file.isDir ? '--' : _formatSize(file.size),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.grey[500],
+                      color: isSelected 
+                          ? Theme.of(context).colorScheme.primary.withOpacity(0.8)
+                          : Colors.grey[500],
                     ),
                   ),
                 ),
@@ -358,7 +404,9 @@ class _FileListItem extends StatelessWidget {
                   child: Text(
                     _formatDate(file.modifiedAt),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.grey[500],
+                      color: isSelected 
+                          ? Theme.of(context).colorScheme.primary.withOpacity(0.8)
+                          : Colors.grey[500],
                     ),
                   ),
                 ),
