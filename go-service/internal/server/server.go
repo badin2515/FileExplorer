@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -714,7 +715,7 @@ func parseIntFromString(s string, val *int) (bool, error) {
 		if c >= '0' && c <= '9' {
 			n = n*10 + int(c-'0')
 		} else {
-			return false, nil
+			return false, fmt.Errorf("invalid character")
 		}
 	}
 	*val = n
