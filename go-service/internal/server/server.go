@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/user/filenode/internal/config"
 	"github.com/user/filenode/internal/errors"
 	"github.com/user/filenode/internal/fs"
 	"github.com/user/filenode/internal/observability"
@@ -38,12 +39,18 @@ type FileNodeServer struct {
 	fsOps      *fs.Operations
 	pathMapper *vpath.VirtualPathMapper
 	streamSem  chan struct{} // Semaphore for concurrency limiting
+	config     *config.Config
 }
 
 // NewFileNodeServer creates a new FileNode server instance
 func NewFileNodeServer() *FileNodeServer {
-	// Initialize security with default config
-	security.Initialize(security.DefaultConfig())
+	// Load configuration
+	appConfig := config.Load()
+
+	// Initialize security with loaded config
+	security.Initialize(&security.Config{
+		HMACSecret: []byte(appConfig.HMACSecret),
+	})
 
 	// Initialize observability (if not already)
 	observability.InitLogger()
@@ -63,6 +70,7 @@ func NewFileNodeServer() *FileNodeServer {
 		fsOps:      fs.NewOperations(),
 		pathMapper: mapper,
 		streamSem:  make(chan struct{}, MaxConcurrentStreams),
+		config:     appConfig,
 	}
 }
 
@@ -312,8 +320,8 @@ func (s *FileNodeServer) GetDeviceInfo(ctx context.Context, req *pb.Empty) (*pb.
 	return &pb.DeviceInfo{
 		DeviceId:     fs.GetDeviceID(),
 		DeviceName:   hostname,
-		Platform:     "windows",
-		Version:      "1.0.0",
+		Platform:     s.config.Platform,
+		Version:      s.config.Version,
 		TotalStorage: 0,
 		FreeStorage:  0,
 	}, nil

@@ -7,6 +7,8 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
+require github.com/joho/godotenv v1.5.1 // indirect
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
