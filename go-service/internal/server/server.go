@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/user/filenode/internal/errors"
 	"github.com/user/filenode/internal/fs"
+	"github.com/user/filenode/internal/observability"
 	"github.com/user/filenode/internal/security"
 	"github.com/user/filenode/internal/streaming"
 	"github.com/user/filenode/internal/vpath"
@@ -27,6 +27,9 @@ const (
 
 	// DefaultPageSize is the default number of entries per page
 	DefaultPageSize = 500
+
+	// MaxConcurrentStreams limits the number of active file streams
+	MaxConcurrentStreams = 20
 )
 
 // FileNodeServer implements the FileNode gRPC service
@@ -34,12 +37,17 @@ type FileNodeServer struct {
 	pb.UnimplementedFileNodeServer
 	fsOps      *fs.Operations
 	pathMapper *vpath.VirtualPathMapper
+	streamSem  chan struct{} // Semaphore for concurrency limiting
 }
 
 // NewFileNodeServer creates a new FileNode server instance
 func NewFileNodeServer() *FileNodeServer {
 	// Initialize security with default config
 	security.Initialize(security.DefaultConfig())
+
+	// Initialize observability (if not already)
+	observability.InitLogger()
+	observability.GetMetrics()
 
 	// Setup virtual path mapper with default mounts
 	mapper := vpath.GetMapper()
@@ -54,6 +62,7 @@ func NewFileNodeServer() *FileNodeServer {
 	return &FileNodeServer{
 		fsOps:      fs.NewOperations(),
 		pathMapper: mapper,
+		streamSem:  make(chan struct{}, MaxConcurrentStreams),
 	}
 }
 
@@ -66,12 +75,14 @@ func (s *FileNodeServer) toRealPath(virtualPath string) (string, error) {
 	// Convert virtual to real path
 	realPath, err := s.pathMapper.ToReal(virtualPath)
 	if err != nil {
+		observability.LogWarn("Path resolution failed", "path", virtualPath, "error", err)
 		return "", status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	// Validate the real path for security
 	cleanPath, err := security.ValidatePath(realPath)
 	if err != nil {
+		observability.LogWarn("Security validation failed", "path", realPath, "error", err)
 		return "", status.Error(codes.PermissionDenied, errors.ErrOutsideRoot)
 	}
 
@@ -82,8 +93,6 @@ func (s *FileNodeServer) toRealPath(virtualPath string) (string, error) {
 func (s *FileNodeServer) toVirtualPath(realPath string) string {
 	virtualPath, err := s.pathMapper.ToVirtual(realPath)
 	if err != nil {
-		// Fallback: return path as-is if no mount found
-		// This shouldn't happen in normal operation
 		return realPath
 	}
 	return virtualPath
@@ -103,7 +112,6 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 	default:
 	}
 
-	// Check if path exists
 	info, err := os.Stat(realPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -116,13 +124,11 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		return status.Error(codes.InvalidArgument, errors.ErrInvalidArg)
 	}
 
-	// Read directory
 	entries, err := os.ReadDir(realPath)
 	if err != nil {
 		return status.Error(codes.PermissionDenied, errors.ErrPermission)
 	}
 
-	// Determine page size
 	pageSize := int(req.PageSize)
 	if pageSize <= 0 {
 		pageSize = DefaultPageSize
@@ -131,10 +137,8 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		pageSize = MaxEntriesPerPage
 	}
 
-	// Parse page token (simple offset-based pagination)
 	startIndex := 0
 	if req.PageToken != "" {
-		// Token format: "offset:N"
 		var offset int
 		if _, parseErr := parsePageToken(req.PageToken, &offset); parseErr == nil {
 			startIndex = offset
@@ -143,33 +147,23 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		}
 	}
 
-	// First pass: filter and count for sorting
-	// For large directories, we limit total entries processed
 	var filteredEntries []os.DirEntry
 	totalCount := 0
 	for _, entry := range entries {
-		// Skip hidden files if not requested
 		if !req.ShowHidden && strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-
 		filteredEntries = append(filteredEntries, entry)
 		totalCount++
-
-		// Limit total entries we process to prevent memory issues
 		if totalCount >= MaxEntriesPerPage*2 {
-			// For very large dirs, we stop after 2x max entries
-			// and indicate there's more via streaming
 			break
 		}
 	}
 
-	// Sort if needed (we need FileEntry for sorting)
 	var fileEntries []*pb.FileEntry
 	dirVirtualPath := req.Path
 
 	for i, entry := range filteredEntries {
-		// Check context periodically
 		if i%100 == 0 {
 			select {
 			case <-ctx.Done():
@@ -192,10 +186,10 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		}
 
 		fileEntry := &pb.FileEntry{
-			Id:          fullVirtualPath, // Use virtual path as ID
+			Id:          fullVirtualPath,
 			Name:        entry.Name(),
-			Path:        fullVirtualPath, // Virtual path for client
-			DisplayPath: fullVirtualPath, // Display virtual path
+			Path:        fullVirtualPath,
+			DisplayPath: fullVirtualPath,
 			IsDir:       entry.IsDir(),
 			Size:        info.Size(),
 			ModifiedAt:  info.ModTime().UnixMilli(),
@@ -208,23 +202,19 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		fileEntries = append(fileEntries, fileEntry)
 	}
 
-	// Sort entries
 	sortEntries(fileEntries, req.SortBy, req.SortOrder)
 
-	// Apply pagination
 	endIndex := startIndex + pageSize
 	if endIndex > len(fileEntries) {
 		endIndex = len(fileEntries)
 	}
 
 	if startIndex >= len(fileEntries) {
-		// No more entries
 		return nil
 	}
 
 	pagedEntries := fileEntries[startIndex:endIndex]
 
-	// Stream entries
 	for _, entry := range pagedEntries {
 		select {
 		case <-ctx.Done():
@@ -237,9 +227,7 @@ func (s *FileNodeServer) ListDir(req *pb.ListDirRequest, stream pb.FileNode_List
 		}
 	}
 
-	log.Printf("ListDir: %s - returned %d/%d entries (page %d)",
-		req.Path, len(pagedEntries), len(fileEntries), startIndex/pageSize)
-
+	observability.LogInfo("ListDir success", "path", req.Path, "count", len(pagedEntries))
 	return nil
 }
 
@@ -263,7 +251,7 @@ func (s *FileNodeServer) Stat(ctx context.Context, req *pb.StatRequest) (*pb.Fil
 		ext = strings.TrimPrefix(filepath.Ext(realPath), ".")
 	}
 
-	virtualPath := req.Path // Use the requested virtual path
+	virtualPath := req.Path
 
 	entry := &pb.FileEntry{
 		Id:          virtualPath,
@@ -291,14 +279,13 @@ func (s *FileNodeServer) Stat(ctx context.Context, req *pb.StatRequest) (*pb.Fil
 	}, nil
 }
 
-// GetDrives returns list of available drives (as virtual mount points)
+// GetDrives returns list of available drives
 func (s *FileNodeServer) GetDrives(ctx context.Context, req *pb.Empty) (*pb.DriveList, error) {
 	realDrives, err := fs.GetDrives()
 	if err != nil {
 		return nil, status.Error(codes.Internal, errors.ErrInternal)
 	}
 
-	// Convert to virtual paths
 	var virtualDrives []*pb.DriveInfo
 	for _, drive := range realDrives {
 		letter := strings.ToLower(string(drive.Name[0]))
@@ -306,7 +293,7 @@ func (s *FileNodeServer) GetDrives(ctx context.Context, req *pb.Empty) (*pb.Driv
 
 		virtualDrive := &pb.DriveInfo{
 			Name:        drive.Name,
-			Path:        virtualPath, // Virtual path instead of real
+			Path:        virtualPath,
 			Label:       drive.Label,
 			TotalSpace:  drive.TotalSpace,
 			FreeSpace:   drive.FreeSpace,
@@ -315,7 +302,6 @@ func (s *FileNodeServer) GetDrives(ctx context.Context, req *pb.Empty) (*pb.Driv
 		virtualDrives = append(virtualDrives, virtualDrive)
 	}
 
-	log.Printf("GetDrives: returned %d drives", len(virtualDrives))
 	return &pb.DriveList{Drives: virtualDrives}, nil
 }
 
@@ -358,11 +344,11 @@ func (s *FileNodeServer) CreateDir(ctx context.Context, req *pb.CreateDirRequest
 		return &pb.OperationResult{
 			Success:   false,
 			Message:   err.Error(),
-			ErrorCode: "CREATE_FAILED", // TODO: Normalize create error
+			ErrorCode: "CREATE_FAILED",
 		}, nil
 	}
 
-	log.Printf("CreateDir: %s", req.Path)
+	observability.LogInfo("CreateDir success", "path", req.Path)
 	return &pb.OperationResult{
 		Success: true,
 		Message: "Directory created",
@@ -412,7 +398,7 @@ func (s *FileNodeServer) CreateFile(ctx context.Context, req *pb.CreateFileReque
 		}
 	}
 
-	log.Printf("CreateFile: %s", req.Path)
+	observability.LogInfo("CreateFile success", "path", req.Path)
 	return &pb.OperationResult{
 		Success: true,
 		Message: "File created",
@@ -466,10 +452,9 @@ func (s *FileNodeServer) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb
 				ErrorCode: "DELETE_FAILED",
 			}, nil
 		}
-
-		log.Printf("Delete: %s (permanent=%v)", virtualPath, req.Permanent)
 	}
 
+	observability.LogInfo("Delete success", "count", len(req.Paths))
 	return &pb.OperationResult{
 		Success: true,
 		Message: "Deleted successfully",
@@ -530,7 +515,7 @@ func (s *FileNodeServer) Rename(ctx context.Context, req *pb.RenameRequest) (*pb
 
 	security.ReleaseFileLock(oldRealPath)
 
-	log.Printf("Rename: %s -> %s", req.Path, req.NewName)
+	observability.LogInfo("Rename success", "path", req.Path, "new_name", req.NewName)
 	return &pb.OperationResult{
 		Success: true,
 		Message: "Renamed successfully",
@@ -539,17 +524,23 @@ func (s *FileNodeServer) Rename(ctx context.Context, req *pb.RenameRequest) (*pb
 
 // StreamFile streams file content to client with preview/download support
 func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNode_StreamFileServer) error {
+	// Concurrent limit check
+	select {
+	case s.streamSem <- struct{}{}:
+		defer func() { <-s.streamSem }()
+	default:
+		return status.Error(codes.ResourceExhausted, "too many concurrent streams")
+	}
+
 	realPath, err := s.toRealPath(req.Path)
 	if err != nil {
 		return err
 	}
 
-	// Get read lock
 	lock := security.GetFileLock(realPath)
 	lock.RLock()
 	defer lock.RUnlock()
 
-	// Open file
 	f, err := os.Open(realPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -572,13 +563,11 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 	mimeType := fs.GetMimeType(realPath)
 	offset := req.Offset
 
-	// Parse stream request using contract
 	streamReq, err := streaming.ParseStreamRequest(req.Path, req.Offset, req.Length, int(req.ChunkSize), mimeType)
 	if err != nil {
 		return status.Error(codes.InvalidArgument, errors.ErrInvalidArg)
 	}
 
-	// Handle resume token
 	if req.ResumeToken != "" {
 		tokenPath, tokenOffset, tokenErr := security.ValidateResumeToken(req.ResumeToken)
 		if tokenErr != nil {
@@ -590,19 +579,16 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 		offset = tokenOffset
 	}
 
-	// Validate offset
 	if err := security.ValidateOffset(offset, totalSize); err != nil {
 		return status.Error(codes.InvalidArgument, errors.ErrOffset)
 	}
 
-	// Seek to offset
 	if offset > 0 {
 		if _, seekErr := f.Seek(offset, io.SeekStart); seekErr != nil {
 			return status.Error(codes.Internal, seekErr.Error())
 		}
 	}
 
-	// Determine bytes to read based on mode
 	bytesToRead := totalSize - offset
 	if streamReq.Mode == streaming.ModePreview || streamReq.Mode == streaming.ModeRange {
 		if streamReq.Length > 0 && streamReq.Length < bytesToRead {
@@ -621,12 +607,12 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 	} else if streamReq.Mode == streaming.ModeRange {
 		modeStr = "range"
 	}
-	log.Printf("StreamFile [%s]: %s (offset=%d, length=%d)", modeStr, req.Path, offset, bytesToRead)
+	observability.LogInfo("StreamFile start", "mode", modeStr, "path", req.Path, "offset", offset, "bytes_to_read", bytesToRead)
 
 	for bytesRead < bytesToRead {
 		select {
 		case <-ctx.Done():
-			log.Printf("StreamFile: %s - cancelled by client", req.Path)
+			observability.LogInfo("StreamFile cancelled", "path", req.Path)
 			return ctx.Err()
 		default:
 		}
@@ -671,7 +657,7 @@ func (s *FileNodeServer) StreamFile(req *pb.StreamFileRequest, stream pb.FileNod
 	return nil
 }
 
-// Helper functions
+// Helpers
 
 func sortEntries(entries []*pb.FileEntry, sortBy pb.SortBy, order pb.SortOrder) {
 	sort.Slice(entries, func(i, j int) bool {
@@ -704,7 +690,6 @@ func parsePageToken(token string, offset *int) (bool, error) {
 		return true, nil
 	}
 
-	// Simple format: just the offset number
 	_, err := parseIntFromString(token, offset)
 	return err == nil, err
 }

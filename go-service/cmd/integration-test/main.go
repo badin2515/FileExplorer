@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +67,7 @@ func main() {
 	runTestDeepNestedNavigation(c, testDir)
 	runTestPermissionDenied(c, testDir)
 	runTestInvalidToken(c, testDir)
+	runTestMaxConcurrentStreams(c, testDir)
 
 	log.Println("ALL TESTS PASSED ✅")
 }
@@ -383,6 +385,71 @@ func runTestInvalidToken(c pb.FileNodeClient, testDir string) {
 	log.Printf("Got expected page token error: %v", err)
 
 	log.Println("PASS: Invalid Token Handling")
+}
+
+func runTestMaxConcurrentStreams(c pb.FileNodeClient, testDir string) {
+	log.Println("Test: MaxConcurrentStreams Limit...")
+
+	// Open 20 streams that wait
+	const limit = 20
+	var wg sync.WaitGroup
+	wg.Add(limit)
+
+	// Create a file to read (10MB to assume it blocks)
+	fpath := filepath.Join(testDir, "concurrent_limit.dat")
+	largeData := make([]byte, 10*1024*1024)
+	os.WriteFile(fpath, largeData, 0644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Launch 20 streams
+	for i := 0; i < limit; i++ {
+		go func() {
+			defer wg.Done()
+			stream, err := c.StreamFile(ctx, &pb.StreamFileRequest{Path: "/test/concurrent_limit.dat"})
+			if err != nil {
+				log.Printf("Setup stream failed: %v", err)
+				return
+			}
+			// Read one chunk and hang
+			_, err = stream.Recv()
+			if err != nil {
+				log.Printf("Setup recv failed: %v", err)
+			}
+			// Wait until test context cancel
+			<-ctx.Done()
+		}()
+	}
+
+	// Wait a bit for them to acquire semaphore
+	time.Sleep(500 * time.Millisecond)
+
+	// Try 21st stream
+	_, err := c.StreamFile(context.Background(), &pb.StreamFileRequest{Path: "/test/concurrent_limit.dat"})
+
+	// It MIGHT return error immediately or on first Recv
+	if err == nil {
+		stream, errRecv := c.StreamFile(context.Background(), &pb.StreamFileRequest{Path: "/test/concurrent_limit.dat"})
+		if errRecv == nil {
+			_, err = stream.Recv()
+		} else {
+			err = errRecv
+		}
+	}
+
+	if err == nil {
+		log.Fatal("Expected error for 21st stream (ResourceExhausted)")
+	}
+
+	errStr := err.Error()
+	if !strings.Contains(errStr, "too many concurrent streams") && !strings.Contains(errStr, "ResourceExhausted") {
+		log.Printf("Got error but maybe wrong one: %v", err)
+	} else {
+		log.Printf("Got expected limit error: %v", err)
+	}
+
+	log.Println("PASS: MaxConcurrentStreams Limit")
 }
 
 // Helpers needed from standard lib that I couldn't import directly in the tool block

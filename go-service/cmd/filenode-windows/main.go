@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/user/filenode/internal/observability"
 	"github.com/user/filenode/internal/server"
 	pb "github.com/user/filenode/pkg/proto"
 	"google.golang.org/grpc"
@@ -28,8 +29,12 @@ func main() {
 		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
+	// Create gRPC server with interceptors
+	unary, stream := observability.LoggingInterceptor()
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(unary),
+		grpc.StreamInterceptor(stream),
+	)
 
 	// Register FileNode service
 	fileNodeServer := server.NewFileNodeServer()
