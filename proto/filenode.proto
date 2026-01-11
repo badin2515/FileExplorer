@@ -1,0 +1,361 @@
+syntax = "proto3";
+
+package filenode;
+
+option go_package = "github.com/user/filenode/pkg/proto";
+
+// ========================================
+// FileNode Service
+// ========================================
+
+service FileNode {
+    // ---- Directory ----
+    rpc ListDir(ListDirRequest) returns (stream FileEntry);
+    rpc Stat(StatRequest) returns (FileInfo);
+    rpc Watch(WatchRequest) returns (stream FileEvent);
+    
+    // ---- File Operations ----
+    rpc CreateDir(CreateDirRequest) returns (OperationResult);
+    rpc CreateFile(CreateFileRequest) returns (OperationResult);
+    rpc Delete(DeleteRequest) returns (OperationResult);
+    rpc Rename(RenameRequest) returns (OperationResult);
+    
+    // ---- Streaming Transfer ----
+    rpc StreamFile(StreamFileRequest) returns (stream FileChunk);
+    rpc UploadStream(stream UploadChunk) returns (UploadResult);
+    
+    // ---- Batch with Progress ----
+    rpc CopyFiles(CopyRequest) returns (stream TransferProgress);
+    rpc MoveFiles(MoveRequest) returns (stream TransferProgress);
+    rpc CancelTransfer(CancelRequest) returns (OperationResult);
+    
+    // ---- Preview ----
+    rpc GetPreview(PreviewRequest) returns (stream PreviewChunk);
+    rpc GetThumbnail(ThumbnailRequest) returns (ThumbnailResponse);
+    
+    // ---- Device ----
+    rpc GetDeviceInfo(Empty) returns (DeviceInfo);
+    rpc GetDrives(Empty) returns (DriveList);
+    rpc DiscoverPeers(Empty) returns (stream PeerInfo);
+    
+    // ---- Security ----
+    rpc RequestPairing(PairingRequest) returns (PairingChallenge);
+    rpc ConfirmPairing(PairingConfirmation) returns (PairingResult);
+}
+
+// ========================================
+// Common
+// ========================================
+
+message Empty {}
+
+message OperationResult {
+    bool success = 1;
+    string message = 2;
+    string error_code = 3;
+}
+
+// ========================================
+// File Entry & Info
+// ========================================
+
+message FileEntry {
+    string id = 1;
+    string name = 2;
+    string path = 3;
+    string display_path = 4;
+    bool is_dir = 5;
+    int64 size = 6;
+    int64 modified_at = 7;
+    string extension = 8;
+    string mime_type = 9;
+    bool is_hidden = 10;
+    bool is_readonly = 11;
+}
+
+message FileInfo {
+    FileEntry entry = 1;
+    int64 created_at = 2;
+    int64 accessed_at = 3;
+    bool is_locked = 4;
+    string locked_by = 5;
+    string checksum = 6;
+}
+
+// ========================================
+// Directory Listing
+// ========================================
+
+message ListDirRequest {
+    string path = 1;
+    bool show_hidden = 2;
+    SortBy sort_by = 3;
+    SortOrder sort_order = 4;
+    string page_token = 5;
+    int32 page_size = 6;
+}
+
+enum SortBy {
+    SORT_NAME = 0;
+    SORT_SIZE = 1;
+    SORT_MODIFIED = 2;
+    SORT_TYPE = 3;
+}
+
+enum SortOrder {
+    ASC = 0;
+    DESC = 1;
+}
+
+message StatRequest {
+    string path = 1;
+}
+
+// ========================================
+// Stream File (Download)
+// ========================================
+
+message StreamFileRequest {
+    string path = 1;
+    int64 offset = 2;
+    int64 length = 3;
+    int32 chunk_size = 4;
+    string resume_token = 5;
+    string lock_id = 6;
+}
+
+message FileChunk {
+    bytes data = 1;
+    int64 offset = 2;
+    int64 total_size = 3;
+    bool is_last = 4;
+    string chunk_checksum = 5;
+    string file_checksum = 6;
+    string resume_token = 7;
+}
+
+// ========================================
+// Upload Stream
+// ========================================
+
+message UploadChunk {
+    string path = 1;
+    int64 total_size = 2;
+    bool overwrite = 3;
+    bytes data = 4;
+    int64 offset = 5;
+    bool is_last = 6;
+    string checksum = 7;
+    string resume_token = 8;
+}
+
+message UploadResult {
+    bool success = 1;
+    string path = 2;
+    int64 bytes_written = 3;
+    string file_checksum = 4;
+    string error_code = 5;
+    string resume_token = 6;
+    int64 resume_offset = 7;
+}
+
+// ========================================
+// Batch Operations
+// ========================================
+
+message CopyRequest {
+    repeated string sources = 1;
+    string destination = 2;
+    bool overwrite = 3;
+    int32 concurrent_limit = 4;
+    string operation_id = 5;
+}
+
+message MoveRequest {
+    repeated string sources = 1;
+    string destination = 2;
+    bool overwrite = 3;
+    string operation_id = 4;
+}
+
+message TransferProgress {
+    string operation_id = 1;
+    string current_file = 2;
+    int64 current_bytes = 3;
+    int64 current_total = 4;
+    int32 files_completed = 5;
+    int32 files_total = 6;
+    int64 bytes_completed = 7;
+    int64 bytes_total = 8;
+    float percent = 9;
+    int64 speed_bps = 10;
+    int32 eta_seconds = 11;
+    TransferStatus status = 12;
+    string error = 13;
+    string resume_token = 14;
+}
+
+enum TransferStatus {
+    QUEUED = 0;
+    IN_PROGRESS = 1;
+    PAUSED = 2;
+    COMPLETED = 3;
+    FAILED = 4;
+    CANCELLED = 5;
+}
+
+message CancelRequest {
+    string operation_id = 1;
+}
+
+// ========================================
+// Preview
+// ========================================
+
+message PreviewRequest {
+    string path = 1;
+    PreviewType type = 2;
+    int64 max_bytes = 3;
+    int32 quality = 4;
+}
+
+enum PreviewType {
+    AUTO = 0;
+    IMAGE = 1;
+    VIDEO = 2;
+    AUDIO = 3;
+    TEXT = 4;
+}
+
+message PreviewChunk {
+    bytes data = 1;
+    string mime_type = 2;
+    int32 quality = 3;
+    bool is_final = 4;
+    int32 width = 5;
+    int32 height = 6;
+    int64 duration_ms = 7;
+}
+
+message ThumbnailRequest {
+    string path = 1;
+    int32 width = 2;
+    int32 height = 3;
+}
+
+message ThumbnailResponse {
+    bytes data = 1;
+    string mime_type = 2;
+    int32 width = 3;
+    int32 height = 4;
+}
+
+// ========================================
+// File Operations
+// ========================================
+
+message CreateDirRequest {
+    string path = 1;
+    bool recursive = 2;
+}
+
+message CreateFileRequest {
+    string path = 1;
+    bytes content = 2;
+}
+
+message DeleteRequest {
+    repeated string paths = 1;
+    bool permanent = 2;
+}
+
+message RenameRequest {
+    string path = 1;
+    string new_name = 2;
+}
+
+// ========================================
+// Watch
+// ========================================
+
+message WatchRequest {
+    repeated string paths = 1;
+    bool recursive = 2;
+}
+
+message FileEvent {
+    FileEventType type = 1;
+    string path = 2;
+    string old_path = 3;
+    int64 timestamp = 4;
+}
+
+enum FileEventType {
+    CREATED = 0;
+    MODIFIED = 1;
+    DELETED = 2;
+    RENAMED = 3;
+}
+
+// ========================================
+// Device & Discovery
+// ========================================
+
+message DeviceInfo {
+    string device_id = 1;
+    string device_name = 2;
+    string platform = 3;
+    string version = 4;
+    int64 total_storage = 5;
+    int64 free_storage = 6;
+}
+
+message DriveList {
+    repeated DriveInfo drives = 1;
+}
+
+message DriveInfo {
+    string name = 1;
+    string path = 2;
+    string label = 3;
+    int64 total_space = 4;
+    int64 free_space = 5;
+    bool is_removable = 6;
+}
+
+message PeerInfo {
+    string device_id = 1;
+    string device_name = 2;
+    string ip_address = 3;
+    int32 port = 4;
+    string platform = 5;
+    bool is_paired = 6;
+}
+
+// ========================================
+// Security
+// ========================================
+
+message PairingRequest {
+    string device_id = 1;
+    string device_name = 2;
+    bytes public_key = 3;
+}
+
+message PairingChallenge {
+    string session_id = 1;
+    string pin_code = 2;
+    int32 expires_in = 3;
+}
+
+message PairingConfirmation {
+    string session_id = 1;
+    string pin_code = 2;
+    bytes signature = 3;
+}
+
+message PairingResult {
+    bool success = 1;
+    string error = 2;
+    bytes certificate = 3;
+}

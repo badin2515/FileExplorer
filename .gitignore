@@ -1,0 +1,28 @@
+# Go
+go-service/filenode.exe
+go-service/pkg/proto/
+
+# Flutter
+flutter-ui/.dart_tool/
+flutter-ui/.packages
+flutter-ui/.pub-cache/
+flutter-ui/.pub/
+flutter-ui/build/
+flutter-ui/.flutter-plugins
+flutter-ui/.flutter-plugins-dependencies
+flutter-ui/windows/flutter/ephemeral/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp
+*.tmp
