@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::command;
 use crate::error::AppError;
 
@@ -260,7 +260,7 @@ pub async fn rename_item(path: String, new_name: String) -> Result<FileInfo, App
     }
     
     let parent = old_path.parent()
-        .ok_or_else(|| AppError::PathInvalid("Cannot rename root directory".into()))?;;
+        .ok_or_else(|| AppError::PathInvalid("Cannot rename root directory".into()))?;
     
     let new_path = parent.join(&new_name);
     
@@ -346,6 +346,93 @@ fn md5_hash(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
+}
+
+
+/// Copy files or folders to a destination
+#[command]
+pub async fn copy_items(source_paths: Vec<String>, target_folder: String) -> Result<(), AppError> {
+    let target_dir = PathBuf::from(&target_folder);
+    
+    if !target_dir.exists() {
+        return Err(AppError::NotFound(target_folder));
+    }
+    
+    for path_str in source_paths {
+        let source_path = PathBuf::from(&path_str);
+        if !source_path.exists() {
+            continue; // Skip invalid paths
+        }
+        
+        let file_name = source_path.file_name()
+            .ok_or_else(|| AppError::PathInvalid("Invalid source path".into()))?;
+            
+        let dest_path = target_dir.join(file_name);
+        
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &dest_path)?;
+        } else {
+            fs::copy(&source_path, &dest_path).map_err(AppError::Io)?;
+        }
+    }
+    
+    Ok(())
+}
+
+/// Move files or folders to a destination
+#[command]
+pub async fn move_items(source_paths: Vec<String>, target_folder: String) -> Result<(), AppError> {
+    let target_dir = PathBuf::from(&target_folder);
+    
+    if !target_dir.exists() {
+        return Err(AppError::NotFound(target_folder));
+    }
+    
+    for path_str in source_paths {
+        let source_path = PathBuf::from(&path_str);
+        if !source_path.exists() {
+            continue;
+        }
+        
+        let file_name = source_path.file_name()
+            .ok_or_else(|| AppError::PathInvalid("Invalid source path".into()))?;
+            
+        let dest_path = target_dir.join(file_name);
+        
+        // Try simple rename first (atomic move on same filesystem)
+        if fs::rename(&source_path, &dest_path).is_err() {
+            // Fallback: Copy and Delete (across filesystems)
+            if source_path.is_dir() {
+                copy_dir_recursive(&source_path, &dest_path)?;
+                fs::remove_dir_all(&source_path).map_err(AppError::Io)?;
+            } else {
+                fs::copy(&source_path, &dest_path).map_err(AppError::Io)?;
+                fs::remove_file(&source_path).map_err(AppError::Io)?;
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+// Helper for recursive directory copy
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), AppError> {
+    if !dst.exists() {
+        fs::create_dir_all(dst).map_err(AppError::Io)?;
+    }
+    
+    for entry in fs::read_dir(src).map_err(AppError::Io)? {
+        let entry = entry.map_err(AppError::Io)?;
+        let file_type = entry.file_type().map_err(AppError::Io)?;
+        let dest_path = dst.join(entry.file_name());
+        
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path)?;
+        } else {
+            fs::copy(entry.path(), &dest_path).map_err(AppError::Io)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]

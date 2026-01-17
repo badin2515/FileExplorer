@@ -14,6 +14,39 @@ import { useState, useEffect, useCallback } from 'react';
 // Filesystem Hooks
 // ============================================
 
+// Helper to parse backend errors
+function parseTauriError(err) {
+    if (typeof err === 'string') {
+        try {
+            // Try to parse if it looks like JSON
+            if (err.trim().startsWith('{')) {
+                const parsed = JSON.parse(err);
+                if (parsed.message && parsed.kind) {
+                    return parsed;
+                }
+            }
+        } catch (e) {
+            // Not JSON, fall through
+        }
+        return { message: err, code: 'UNKNOWN_ERROR', kind: 'PERMANENT' };
+    }
+
+    // Already an object (Tauri 2.0 often returns object directly for serializable errors)
+    if (typeof err === 'object' && err !== null) {
+        return {
+            message: err.message || 'Unknown error',
+            code: err.code || 'UNKNOWN_ERROR',
+            kind: err.kind || 'PERMANENT'
+        };
+    }
+
+    return { message: String(err), code: 'UNKNOWN_ERROR', kind: 'PERMANENT' };
+}
+
+// ============================================
+// Filesystem Hooks
+// ============================================
+
 /**
  * Hook to list directory contents
  */
@@ -31,7 +64,8 @@ export function useListDirectory(path) {
             });
             setData(result);
         } catch (e) {
-            setError(String(e));
+            console.warn('List directory error:', e);
+            setError(parseTauriError(e));
         } finally {
             setLoading(false);
         }
@@ -59,7 +93,7 @@ export function useFileInfo(path) {
                 const result = await invoke('get_file_info', { path });
                 setData(result);
             } catch (e) {
-                setError(String(e));
+                setError(parseTauriError(e));
             } finally {
                 setLoading(false);
             }
@@ -84,7 +118,7 @@ export function useStorageVolumes() {
             const result = await invoke('get_storage_volumes');
             setVolumes(result);
         } catch (e) {
-            setError(String(e));
+            setError(parseTauriError(e));
         } finally {
             setLoading(false);
         }
@@ -102,15 +136,27 @@ export function useStorageVolumes() {
 // ============================================
 
 export async function createFolder(path, name) {
-    return invoke('create_folder', { path, name });
+    try {
+        return await invoke('create_folder', { path, name });
+    } catch (e) {
+        throw parseTauriError(e);
+    }
 }
 
 export async function deleteItems(paths) {
-    return invoke('delete_items', { paths });
+    try {
+        return await invoke('delete_items', { paths });
+    } catch (e) {
+        throw parseTauriError(e);
+    }
 }
 
 export async function renameItem(path, newName) {
-    return invoke('rename_item', { path, newName });
+    try {
+        return await invoke('rename_item', { path, newName });
+    } catch (e) {
+        throw parseTauriError(e);
+    }
 }
 
 // ============================================

@@ -262,19 +262,40 @@ const Panel = ({
                 </div>
             ) : error ? (
                 <div className="flex-1 flex items-center justify-center">
-                    <div className="flex flex-col items-center gap-3 text-center px-4">
-                        <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
-                            <span className="text-red-500 text-xl">!</span>
+                    <div className="flex flex-col items-center gap-4 text-center px-6 py-8 rounded-xl bg-opacity-50" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                        <div
+                            className="w-16 h-16 rounded-full flex items-center justify-center mb-2"
+                            style={{
+                                backgroundColor: error.kind === 'PERMISSION' ? '#fff7ed' :
+                                    error.kind === 'NOT_FOUND' ? '#f3f4f6' : '#fee2e2',
+                                color: error.kind === 'PERMISSION' ? '#c2410c' :
+                                    error.kind === 'NOT_FOUND' ? '#4b5563' : '#dc2626'
+                            }}
+                        >
+                            {error.kind === 'PERMISSION' ? (
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                            ) : error.kind === 'NOT_FOUND' ? (
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            ) : (
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            )}
                         </div>
                         <div>
-                            <p className="text-sm font-medium text-[#2d2a26]">Error loading directory</p>
-                            <p className="text-xs text-[#7a756e] mt-1 max-w-xs">{error}</p>
+                            <h3 className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                                {error.code === 'PERMISSION_DENIED' ? 'Access Denied' :
+                                    error.code === 'NOT_FOUND' ? 'Folder Not Found' :
+                                        'Something went wrong'}
+                            </h3>
+                            <p className="text-sm opacity-80 max-w-xs mx-auto break-words" style={{ color: 'var(--text-secondary)' }}>
+                                {error.message || String(error)}
+                            </p>
                         </div>
                         <button
                             onClick={refresh}
-                            className="px-3 py-1.5 bg-[#d97352] text-white rounded-lg text-xs hover:bg-[#c66447] transition-colors"
+                            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors mt-2"
+                            style={{ backgroundColor: 'var(--accent-primary)', color: '#ffffff' }}
                         >
-                            Try Again
+                            {error.kind === 'TRANSIENT' ? 'Retry Now' : 'Refresh'}
                         </button>
                     </div>
                 </div>

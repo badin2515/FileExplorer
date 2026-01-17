@@ -44,6 +44,7 @@ mod chaos_tests;
 use commands::{
     // Filesystem commands
     list_directory, get_file_info, create_folder, delete_items, rename_item, get_storage_volumes,
+    copy_items, move_items,
     
     // Device commands (identity + discovery)
     start_discovery, stop_discovery, get_discovered_devices, add_device_manually,
@@ -58,6 +59,8 @@ use commands::{
     pause_stream, resume_stream, cancel_stream,
 };
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,8 +73,21 @@ pub fn run() {
                 )?;
             }
             
+            // Initialize Backend Runtime
+            let runtime = runtime::create_runtime();
+            app.manage(runtime.clone());
+            
+            // Handle graceful shutdown
+            let runtime_handle = runtime.clone();
+            let app_handle = app.handle().clone();
+            
+            // Need to spawn a listener for app exit events if possible, 
+            // but for now let's just ensure runtime is managed.
+            
             log::info!("FileExplorer starting...");
             log::info!("Architecture: filesystem → device → connection → transfer");
+            log::info!("Backend Runtime initialized and managed");
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -84,6 +100,8 @@ pub fn run() {
             delete_items,
             rename_item,
             get_storage_volumes,
+            copy_items,
+            move_items,            
             
             // ═══════════════════════════════════════
             // Device (identity + discovery)
