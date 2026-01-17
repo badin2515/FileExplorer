@@ -1,0 +1,295 @@
+// FileExplorer Protocol Definition v2.0
+// 
+// HYBRID APPROACH:
+// - Control/Metadata → gRPC (strongly typed, efficient)
+// - File Transfer → HTTP/2 (Range headers, resume, proven)
+// - Discovery → mDNS/NSD (before connection established)
+//
+// This design follows patterns used by production-level tools.
+
+syntax = "proto3";
+
+package fileexplorer;
+
+option java_package = "com.fileexplorer.grpc";
+option java_multiple_files = true;
+
+// ============================================
+// Core Data Types
+// ============================================
+
+message FileInfo {
+  string name = 1;
+  string path = 2;
+  FileType type = 3;
+  int64 size = 4;
+  int64 modified_time = 5;
+  int64 created_time = 6;
+  string mime_type = 7;
+  bool is_hidden = 8;
+  bool is_readable = 9;
+  bool is_writable = 10;
+}
+
+enum FileType {
+  FILE_TYPE_UNKNOWN = 0;
+  FILE_TYPE_FILE = 1;
+  FILE_TYPE_FOLDER = 2;
+  FILE_TYPE_SYMLINK = 3;
+}
+
+message DeviceInfo {
+  string device_id = 1;
+  string device_name = 2;
+  DeviceType device_type = 3;
+  string os_version = 4;
+  int64 total_storage = 5;
+  int64 available_storage = 6;
+  string ip_address = 7;
+  int32 grpc_port = 8;
+  int32 http_port = 9;  // สำหรับ file transfer
+}
+
+enum DeviceType {
+  DEVICE_TYPE_UNKNOWN = 0;
+  DEVICE_TYPE_ANDROID = 1;
+  DEVICE_TYPE_WINDOWS = 2;
+}
+
+// ============================================
+// Operation Tracking (สำหรับ retry)
+// ============================================
+
+message OperationResult {
+  string operation_id = 1;      // UUID สำหรับ idempotency
+  bool success = 2;
+  string error_code = 3;        // เช่น "FILE_NOT_FOUND", "PERMISSION_DENIED"
+  string error_message = 4;
+  int64 completed_at = 5;
+}
+
+// ============================================
+// FileSystem Service (gRPC) ✅
+// ============================================
+
+service FileSystemService {
+  // List files in a directory
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  
+  // Get file info (+ optional thumbnail URL)
+  rpc GetFileInfo(GetFileInfoRequest) returns (GetFileInfoResponse);
+  
+  // Create folder
+  rpc CreateFolder(CreateFolderRequest) returns (OperationResult);
+  
+  // Delete files/folders (with operation_id for retry)
+  rpc Delete(DeleteRequest) returns (OperationResult);
+  
+  // Rename/move
+  rpc Rename(RenameRequest) returns (OperationResult);
+  
+  // Copy (returns immediately, progress via separate call)
+  rpc StartCopy(CopyRequest) returns (CopyStartResponse);
+  
+  // Get copy progress
+  rpc GetCopyProgress(GetProgressRequest) returns (CopyProgress);
+  
+  // Search (streaming results)
+  rpc Search(SearchRequest) returns (stream SearchResult);
+  
+  // Storage info
+  rpc GetStorageInfo(GetStorageInfoRequest) returns (GetStorageInfoResponse);
+}
+
+// ----- List Directory -----
+message ListDirectoryRequest {
+  string path = 1;
+  bool include_hidden = 2;
+  SortField sort_by = 3;
+  bool sort_desc = 4;
+  int32 page = 5;           // pagination
+  int32 page_size = 6;      // default 100
+}
+
+message ListDirectoryResponse {
+  string path = 1;
+  repeated FileInfo files = 2;
+  int32 total_count = 3;
+  bool has_more = 4;
+}
+
+enum SortField {
+  SORT_NAME = 0;
+  SORT_SIZE = 1;
+  SORT_MODIFIED = 2;
+  SORT_TYPE = 3;
+}
+
+// ----- Get File Info -----
+message GetFileInfoRequest {
+  string path = 1;
+  bool include_thumbnail_url = 2;
+}
+
+message GetFileInfoResponse {
+  FileInfo file = 1;
+  string thumbnail_url = 2;   // HTTP URL สำหรับ thumbnail
+  string download_url = 3;    // HTTP URL สำหรับ download
+}
+
+// ----- Create Folder -----
+message CreateFolderRequest {
+  string operation_id = 1;    // client-generated UUID
+  string parent_path = 2;
+  string name = 3;
+}
+
+// ----- Delete -----
+message DeleteRequest {
+  string operation_id = 1;
+  repeated string paths = 2;
+  bool permanent = 3;         // skip trash
+}
+
+// ----- Rename -----
+message RenameRequest {
+  string operation_id = 1;
+  string path = 2;
+  string new_name = 3;
+}
+
+// ----- Copy -----
+message CopyRequest {
+  string operation_id = 1;
+  repeated string source_paths = 2;
+  string destination_folder = 3;
+  bool move = 4;              // true = move, false = copy
+}
+
+message CopyStartResponse {
+  string operation_id = 1;
+  bool accepted = 2;
+  string error_message = 3;
+  int32 total_files = 4;
+  int64 total_bytes = 5;
+}
+
+message GetProgressRequest {
+  string operation_id = 1;
+}
+
+message CopyProgress {
+  string operation_id = 1;
+  ProgressStatus status = 2;
+  int32 files_completed = 3;
+  int32 files_total = 4;
+  int64 bytes_completed = 5;
+  int64 bytes_total = 6;
+  string current_file = 7;
+  string error_message = 8;
+}
+
+enum ProgressStatus {
+  PROGRESS_PENDING = 0;
+  PROGRESS_RUNNING = 1;
+  PROGRESS_COMPLETED = 2;
+  PROGRESS_FAILED = 3;
+  PROGRESS_CANCELLED = 4;
+}
+
+// ----- Search -----
+message SearchRequest {
+  string root_path = 1;
+  string query = 2;
+  bool recursive = 3;
+  repeated string extensions = 4;
+  int64 min_size = 5;
+  int64 max_size = 6;
+  int32 max_results = 7;
+}
+
+message SearchResult {
+  FileInfo file = 1;
+  string match_context = 2;   // แสดงว่า match ตรงไหน
+}
+
+// ----- Storage Info -----
+message GetStorageInfoRequest {}
+
+message GetStorageInfoResponse {
+  repeated StorageVolume volumes = 1;
+}
+
+message StorageVolume {
+  string name = 1;
+  string path = 2;
+  int64 total_bytes = 3;
+  int64 used_bytes = 4;
+  int64 available_bytes = 5;
+  bool is_removable = 6;
+}
+
+// ============================================
+// Connection Service (gRPC) ✅
+// After mDNS discovery, use this to establish session
+// ============================================
+
+service ConnectionService {
+  // Check if device is alive
+  rpc Ping(PingRequest) returns (PingResponse);
+  
+  // Get device info after connection
+  rpc GetDeviceInfo(GetDeviceInfoRequest) returns (DeviceInfo);
+  
+  // Request pairing (device shows code)
+  rpc RequestPairing(PairingRequest) returns (PairingResponse);
+  
+  // Verify pairing code
+  rpc VerifyPairing(VerifyPairingRequest) returns (VerifyPairingResponse);
+  
+  // Heartbeat to maintain connection
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message PingRequest {
+  int64 timestamp = 1;
+}
+
+message PingResponse {
+  int64 timestamp = 1;
+  int64 latency_ms = 2;
+}
+
+message GetDeviceInfoRequest {}
+
+message PairingRequest {
+  string device_name = 1;
+  string device_id = 2;
+}
+
+message PairingResponse {
+  bool requires_confirmation = 1;
+  string pairing_session_id = 2;
+  int32 timeout_seconds = 3;
+}
+
+message VerifyPairingRequest {
+  string pairing_session_id = 1;
+  string code = 2;            // 6-digit code
+}
+
+message VerifyPairingResponse {
+  bool success = 1;
+  string session_token = 2;   // ใช้ใน header ของ request ถัดๆ ไป
+  int64 expires_at = 3;
+  string error_message = 4;
+}
+
+message HeartbeatRequest {
+  string session_token = 1;
+}
+
+message HeartbeatResponse {
+  bool valid = 1;
+  int64 server_time = 2;
+}
