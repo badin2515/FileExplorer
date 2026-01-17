@@ -12,6 +12,7 @@ const FileArea = ({
     items,
     viewMode,
     selectedIds,
+    cutIds, // Set<string>
     searchQuery,
     onSelect,
     onNavigate,
@@ -52,6 +53,7 @@ const FileArea = ({
                             item={item}
                             index={index}
                             selected={selectedIds.has(item.id)}
+                            isCut={cutIds?.has(item.id)}
                             onSelect={(multi, range) => onSelect(item.id, multi, range)}
                             onNavigate={() => onNavigate(item)}
                             onContextMenu={onContextMenu}
@@ -76,6 +78,7 @@ const FileArea = ({
                             item={item}
                             index={index}
                             selected={selectedIds.has(item.id)}
+                            isCut={cutIds?.has(item.id)}
                             onSelect={(multi, range) => onSelect(item.id, multi, range)}
                             onNavigate={() => onNavigate(item)}
                             onContextMenu={onContextMenu}

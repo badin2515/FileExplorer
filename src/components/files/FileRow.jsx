@@ -1,3 +1,4 @@
+import React from 'react'; // Added React import even if Vite handles it, for safety
 import { MoreHorizontal } from 'lucide-react';
 import FileIcon from './FileIcon';
 
@@ -30,7 +31,7 @@ const formatDate = (item) => {
     }
 };
 
-const FileRow = ({ item, index, selected, onSelect, onNavigate, onContextMenu }) => (
+const FileRow = ({ item, index, selected, isCut, onSelect, onNavigate, onContextMenu }) => (
     <div
         onClick={(e) => {
             e.stopPropagation();
@@ -46,10 +47,10 @@ const FileRow = ({ item, index, selected, onSelect, onNavigate, onContextMenu })
             }
             if (onContextMenu) onContextMenu(e, item);
         }}
-        className="group flex items-center px-3 py-1.5 cursor-pointer select-none"
+        className={`group flex items-center px-3 py-1.5 cursor-pointer select-none border-b transition-colors duration-150 ${isCut ? 'opacity-50' : ''}`}
         style={{
             backgroundColor: selected ? 'var(--accent-light)' : 'transparent',
-            borderBottom: '1px solid var(--border-light)',
+            borderBottomColor: 'var(--border-light)',
         }}
         onMouseOver={(e) => {
             if (!selected) {

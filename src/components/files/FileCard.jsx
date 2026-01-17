@@ -4,7 +4,7 @@ import FileIcon from './FileIcon';
  * FileCard Component
  * Compact icon view for grid mode
  */
-const FileCard = ({ item, index, selected, onSelect, onNavigate, onContextMenu }) => (
+const FileCard = ({ item, index, selected, isCut, onSelect, onNavigate, onContextMenu }) => (
     <div
         onClick={(e) => {
             e.stopPropagation();
@@ -19,7 +19,7 @@ const FileCard = ({ item, index, selected, onSelect, onNavigate, onContextMenu }
             }
             if (onContextMenu) onContextMenu(e, item);
         }}
-        className="flex flex-col items-center p-2 cursor-pointer select-none rounded"
+        className={`flex flex-col items-center p-2 cursor-pointer select-none rounded ${isCut ? 'opacity-50' : ''}`}
         style={{
             backgroundColor: selected ? 'var(--accent-light)' : 'transparent',
             border: selected ? '1px solid var(--accent-primary)' : '1px solid transparent',

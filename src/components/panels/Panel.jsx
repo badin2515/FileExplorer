@@ -100,41 +100,58 @@ const Panel = ({
     };
 
     const handleSelect = (id, multi, range) => {
+        // Ensure panel is active when selecting items
+        if (onActivate && !isActive) onActivate();
+
+        // Clear context menu if open
+        if (contextMenu) setContextMenu(null);
+
         let newSet;
+        const currentIndex = filteredItems.findIndex(i => i.id === id);
 
-        if (range && lastSelectedId) {
+        if (range) {
             // Range Selection (Shift + Click)
-            const lastIndex = filteredItems.findIndex(i => i.id === lastSelectedId);
-            const currentIndex = filteredItems.findIndex(i => i.id === id);
+            // Use existing anchor or fallback to current item
+            const anchorId = lastSelectedId || id;
+            let anchorIndex = filteredItems.findIndex(i => i.id === anchorId);
 
-            if (lastIndex !== -1 && currentIndex !== -1) {
-                const start = Math.min(lastIndex, currentIndex);
-                const end = Math.max(lastIndex, currentIndex);
+            // If anchor is gone (e.g. filtered out), reset anchor to current
+            if (anchorIndex === -1) {
+                anchorIndex = currentIndex;
+                setLastSelectedId(id);
+            }
 
-                // Create selection from range
-                // Note: Standard Shift+Click usually replaces selection with the range
-                // unless Ctrl is also held. Here for simplicity, we'll replace selection with the range.
-                // If you want "Add to selection", use: newSet = new Set(selectedIds);
-                newSet = new Set();
+            if (currentIndex !== -1 && anchorIndex !== -1) {
+                const start = Math.min(anchorIndex, currentIndex);
+                const end = Math.max(anchorIndex, currentIndex);
+
+                if (multi) {
+                    // Ctrl + Shift + Click: Add range to existing selection
+                    newSet = new Set(selectedIds);
+                } else {
+                    // Shift + Click: Replace selection with range
+                    newSet = new Set();
+                }
 
                 for (let i = start; i <= end; i++) {
                     newSet.add(filteredItems[i].id);
                 }
             } else {
+                // Fallback
                 newSet = new Set([id]);
                 setLastSelectedId(id);
             }
+            // IMPORTANT: Do NOT update lastSelectedId on Shift+Click to keep the anchor stable!
         } else if (multi) {
             // Multi Selection (Ctrl/Cmd + Click)
             newSet = new Set(selectedIds);
             if (newSet.has(id)) {
                 newSet.delete(id);
-                // If we deselect the anchor, we should probably update anchor to null or keep it?
-                // Often we keep it until a new active selection is made.
             } else {
                 newSet.add(id);
-                setLastSelectedId(id);
             }
+            // Update anchor to the latest interacted item
+            setLastSelectedId(id);
         } else {
             // Single Selection
             newSet = new Set([id]);
@@ -409,6 +426,12 @@ const Panel = ({
         }
     };
 
+    // Calculate cut items for visual feedback
+    const cutIds = useMemo(() => {
+        if (!clipboard || clipboard.mode !== 'cut') return new Set();
+        return new Set(clipboard.items.map(i => i.id));
+    }, [clipboard]);
+
     return (
         <div
             className="flex-1 flex flex-col min-w-0 overflow-hidden relative" // Added relative for overlay
@@ -419,6 +442,9 @@ const Panel = ({
             }}
             onClick={onActivate}
         >
+            {/* ... Header & Toolbar code omitted for brevity ... */}
+            {/* Panel Header and Toolbar are above this, keep them unchanged */}
+
             {/* Panel Header */}
             <header
                 className="h-14 px-4 flex items-center justify-between"
@@ -600,6 +626,7 @@ const Panel = ({
                     items={filteredItems}
                     viewMode={viewMode}
                     selectedIds={selectedIds}
+                    cutIds={cutIds} // Pass cutIds to FileArea
                     searchQuery={searchQuery}
                     currentPath={currentPath}
                     onSelect={handleSelect}
