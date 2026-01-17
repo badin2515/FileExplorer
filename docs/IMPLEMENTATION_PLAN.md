@@ -111,11 +111,18 @@ FileExplorer/
 
 ## 📅 Development Phases
 
-### Phase 1: Foundation (Week 1-2)
-- [ ] Set up Tauri v2 project wrapping existing React app
-- [ ] Create Android project with Kotlin + Compose
-- [ ] Generate code from .proto files for both platforms
-- [ ] Implement basic gRPC connection (Ping service)
+### Phase 1: Foundation (Current Status: ✅ Mostly Done)
+- [x] Set up Tauri v2 project wrapping existing React app
+- [x] Configure basic build pipeline
+- [ ] Create Android project structure (Pending)
+
+### Phase 1.5: Backend Hardening (Week 2) - 🔨 IN PROGRESS
+*Concept: "Run as a Runtime, not just functions"*
+
+- [ ] **Structured Error Handling**: Implement `AppError` enum instead of String strings.
+- [ ] **Lifecycle Management**: Implement `BackendRuntime` for Start/Stop/Suspend services.
+- [ ] **State Persistence**: Save transfer states to disk (JSON/SQLite) for resume capability.
+- [ ] **HTTP Server Integration**: Set up Actix-web/Axum for file transfer endpoint.
 
 ### Phase 2: File System Operations (Week 3-4)
 - [ ] Implement Android gRPC server

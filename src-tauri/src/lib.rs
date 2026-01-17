@@ -32,6 +32,8 @@
 mod commands;
 mod state_machine;
 mod events;
+mod error;
+mod runtime;
 
 #[cfg(test)]
 mod mock_transport;

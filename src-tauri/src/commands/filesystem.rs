@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use tauri::command;
+use crate::error::AppError;
 
 /// File or folder information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,27 +55,26 @@ pub struct ListDirResponse {
 
 /// List files and folders in a directory
 #[command]
-pub async fn list_directory(request: ListDirRequest) -> Result<ListDirResponse, String> {
+pub async fn list_directory(request: ListDirRequest) -> Result<ListDirResponse, AppError> {
     let path = PathBuf::from(&request.path);
     
     if !path.exists() {
-        return Err(format!("Path does not exist: {}", request.path));
+        return Err(AppError::NotFound(request.path));
     }
     
     if !path.is_dir() {
-        return Err(format!("Path is not a directory: {}", request.path));
+        return Err(AppError::PathInvalid(format!("Not a directory: {}", request.path)));
     }
     
     let include_hidden = request.include_hidden.unwrap_or(false);
     
-    let entries = fs::read_dir(&path)
-        .map_err(|e| format!("Failed to read directory: {}", e))?;
+    let entries = fs::read_dir(&path).map_err(AppError::Io)?;
     
     let mut files: Vec<FileInfo> = Vec::new();
     
     for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
+        let entry = entry.map_err(AppError::Io)?;
+        let metadata = entry.metadata().map_err(AppError::Io)?;
         
         let file_name = entry.file_name().to_string_lossy().to_string();
         
@@ -151,15 +151,14 @@ pub async fn list_directory(request: ListDirRequest) -> Result<ListDirResponse, 
 
 /// Get file info
 #[command]
-pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
+pub async fn get_file_info(path: String) -> Result<FileInfo, AppError> {
     let path_buf = PathBuf::from(&path);
     
     if !path_buf.exists() {
-        return Err(format!("Path does not exist: {}", path));
+        return Err(AppError::NotFound(path));
     }
     
-    let metadata = fs::metadata(&path_buf)
-        .map_err(|e| format!("Failed to read metadata: {}", e))?;
+    let metadata = fs::metadata(&path_buf).map_err(AppError::Io)?;
     
     let file_name = path_buf.file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -202,23 +201,22 @@ pub async fn get_file_info(path: String) -> Result<FileInfo, String> {
 
 /// Create a new folder
 #[command]
-pub async fn create_folder(path: String, name: String) -> Result<FileInfo, String> {
+pub async fn create_folder(path: String, name: String) -> Result<FileInfo, AppError> {
     let parent = PathBuf::from(&path);
     let new_folder = parent.join(&name);
     
     if new_folder.exists() {
-        return Err(format!("Folder already exists: {}", name));
+        return Err(AppError::AlreadyExists(format!("Folder already exists: {}", name)));
     }
     
-    fs::create_dir(&new_folder)
-        .map_err(|e| format!("Failed to create folder: {}", e))?;
+    fs::create_dir(&new_folder).map_err(AppError::Io)?;
     
     get_file_info(new_folder.to_string_lossy().to_string()).await
 }
 
 /// Delete files or folders
 #[command]
-pub async fn delete_items(paths: Vec<String>, permanent: bool) -> Result<usize, String> {
+pub async fn delete_items(paths: Vec<String>, permanent: bool) -> Result<usize, AppError> {
     let mut deleted = 0;
     
     for path_str in paths {
@@ -228,25 +226,23 @@ pub async fn delete_items(paths: Vec<String>, permanent: bool) -> Result<usize, 
             continue;
         }
         
-        if permanent {
+        let result = if permanent {
             if path.is_dir() {
                 fs::remove_dir_all(&path)
-                    .map_err(|e| format!("Failed to delete folder {}: {}", path_str, e))?;
             } else {
                 fs::remove_file(&path)
-                    .map_err(|e| format!("Failed to delete file {}: {}", path_str, e))?;
             }
         } else {
             // TODO: Move to trash instead of permanent delete
             // For now, just do permanent delete
             if path.is_dir() {
                 fs::remove_dir_all(&path)
-                    .map_err(|e| format!("Failed to delete folder {}: {}", path_str, e))?;
             } else {
                 fs::remove_file(&path)
-                    .map_err(|e| format!("Failed to delete file {}: {}", path_str, e))?;
             }
-        }
+        };
+
+        result.map_err(AppError::Io)?;
         
         deleted += 1;
     }
@@ -256,31 +252,30 @@ pub async fn delete_items(paths: Vec<String>, permanent: bool) -> Result<usize, 
 
 /// Rename a file or folder
 #[command]
-pub async fn rename_item(path: String, new_name: String) -> Result<FileInfo, String> {
+pub async fn rename_item(path: String, new_name: String) -> Result<FileInfo, AppError> {
     let old_path = PathBuf::from(&path);
     
     if !old_path.exists() {
-        return Err(format!("Path does not exist: {}", path));
+        return Err(AppError::NotFound(path));
     }
     
     let parent = old_path.parent()
-        .ok_or_else(|| "Cannot rename root directory".to_string())?;
+        .ok_or_else(|| AppError::PathInvalid("Cannot rename root directory".into()))?;;
     
     let new_path = parent.join(&new_name);
     
     if new_path.exists() {
-        return Err(format!("A file or folder with name '{}' already exists", new_name));
+        return Err(AppError::AlreadyExists(format!("'{}' already exists", new_name)));
     }
     
-    fs::rename(&old_path, &new_path)
-        .map_err(|e| format!("Failed to rename: {}", e))?;
+    fs::rename(&old_path, &new_path).map_err(AppError::Io)?;
     
     get_file_info(new_path.to_string_lossy().to_string()).await
 }
 
 /// Get storage volumes
 #[command]
-pub async fn get_storage_volumes() -> Result<Vec<StorageVolume>, String> {
+pub async fn get_storage_volumes() -> Result<Vec<StorageVolume>, AppError> {
     let mut volumes = Vec::new();
     
     #[cfg(windows)]
