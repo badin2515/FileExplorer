@@ -3,16 +3,178 @@
 /* Import Google Font - Outfit for a warm, modern feel */
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
 
+/* ============================================ */
+/* Theme Variables */
+/* ============================================ */
+
+:root {
+  --font-scale: 1;
+
+  /* Light Theme (Default) */
+  --bg-primary: #faf7f2;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f5f3f0;
+  --bg-hover: #eae6e0;
+
+  --text-primary: #2d2a26;
+  --text-secondary: #5c5955;
+  --text-tertiary: #7a756e;
+  --text-muted: #9a958e;
+  --text-faint: #c4bfb6;
+
+  --border-color: #eae6e0;
+  --border-light: #f5f3f0;
+
+  --accent-primary: #d97352;
+  --accent-hover: #c66447;
+  --accent-light: rgba(217, 115, 82, 0.1);
+
+  --scrollbar-thumb: #e5dfd5;
+  --scrollbar-hover: #d4cfc5;
+
+  --shadow-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Dark Theme */
+[data-theme="dark"] {
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #242424;
+  --bg-tertiary: #2d2d2d;
+  --bg-hover: #363636;
+
+  --text-primary: #f5f5f5;
+  --text-secondary: #d4d4d4;
+  --text-tertiary: #a3a3a3;
+  --text-muted: #737373;
+  --text-faint: #525252;
+
+  --border-color: #363636;
+  --border-light: #2d2d2d;
+
+  --accent-primary: #e88a6c;
+  --accent-hover: #f5a992;
+  --accent-light: rgba(232, 138, 108, 0.15);
+
+  --scrollbar-thumb: #404040;
+  --scrollbar-hover: #525252;
+
+  --shadow-color: rgba(0, 0, 0, 0.4);
+}
+
+/* ============================================ */
+/* Base Styles */
+/* ============================================ */
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #faf7f2;
-  color: #2d2a26;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
+/* ============================================ */
+/* Theme-aware Components */
+/* ============================================ */
+
+/* App container */
+.app-container {
+  --base-size: 14px;
+  background: var(--bg-primary);
+}
+
+/* Sidebar */
+.theme-sidebar {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+/* Panel */
+.theme-panel {
+  background: var(--bg-secondary);
+}
+
+/* Header/Toolbar */
+.theme-header {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+.theme-toolbar {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+}
+
+/* Buttons */
+.theme-button {
+  color: var(--text-secondary);
+}
+
+.theme-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.theme-button-active {
+  background: var(--accent-primary);
+  color: white;
+}
+
+/* Text colors */
+.theme-text-primary {
+  color: var(--text-primary);
+}
+
+.theme-text-secondary {
+  color: var(--text-secondary);
+}
+
+.theme-text-muted {
+  color: var(--text-muted);
+}
+
+/* ============================================ */
+/* Font Scaling */
+/* ============================================ */
+
+.app-container .text-xs {
+  font-size: calc(12px * var(--font-scale)) !important;
+}
+
+.app-container .text-sm {
+  font-size: calc(14px * var(--font-scale)) !important;
+}
+
+.app-container .text-base {
+  font-size: calc(16px * var(--font-scale)) !important;
+}
+
+.app-container .text-lg {
+  font-size: calc(18px * var(--font-scale)) !important;
+}
+
+.app-container .text-xl {
+  font-size: calc(20px * var(--font-scale)) !important;
+}
+
+.app-container .text-2xl {
+  font-size: calc(24px * var(--font-scale)) !important;
+}
+
+.app-container .file-name {
+  font-size: calc(14px * var(--font-scale));
+}
+
+.app-container .file-meta {
+  font-size: calc(12px * var(--font-scale));
+}
+
+/* ============================================ */
 /* Smooth Scrollbar */
+/* ============================================ */
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -23,14 +185,26 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #e5dfd5;
+  background: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #d4cfc5;
+  background: var(--scrollbar-hover);
   border: 2px solid transparent;
   background-clip: padding-box;
+}
+
+/* ============================================ */
+/* Theme Transition */
+/* ============================================ */
+
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.3s ease,
+    border-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.3s ease !important;
 }

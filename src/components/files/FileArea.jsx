@@ -1,4 +1,4 @@
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import FileRow from './FileRow';
 import FileCard from './FileCard';
 import EmptyState from './EmptyState';
@@ -6,7 +6,7 @@ import EmptyState from './EmptyState';
 /**
  * FileArea Component
  * Displays files in list or grid view
- * Reusable for dual panel system
+ * Optimized for mouse + keyboard navigation
  */
 const FileArea = ({
     items,
@@ -19,54 +19,51 @@ const FileArea = ({
     currentPath
 }) => (
     <div
-        className="flex-1 overflow-auto p-4 bg-[#f8f6f3]"
+        className="flex-1 overflow-auto"
+        style={{ backgroundColor: 'var(--bg-secondary)' }}
         onClick={onClearSelection}
     >
-        <AnimatePresence mode="wait">
-            {viewMode === 'list' ? (
-                <motion.div
-                    key={currentPath + '-list'}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="bg-white rounded-2xl border border-[#eae6e0] overflow-hidden"
+        {viewMode === 'list' ? (
+            <div className="min-w-full">
+                {/* Table Header */}
+                <div
+                    className="flex items-center px-3 py-2 text-xs font-medium uppercase tracking-wide sticky top-0 z-10 select-none"
+                    style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        borderBottom: '1px solid var(--border-color)',
+                        color: 'var(--text-muted)'
+                    }}
                 >
-                    {/* Table Header */}
-                    <div className="flex items-center px-5 py-3 bg-[#faf8f5] border-b border-[#eae6e0] text-xs font-semibold text-[#9a958e] uppercase tracking-wider">
-                        <span style={{ flex: 1 }}>Name</span>
-                        <span style={{ width: 100 }}>Size</span>
-                        <span style={{ width: 140 }}>Modified</span>
-                        <span style={{ width: 50 }}></span>
-                    </div>
+                    <span style={{ flex: 1, minWidth: 200 }}>Name</span>
+                    <span style={{ width: 100, textAlign: 'right' }}>Size</span>
+                    <span style={{ width: 150, textAlign: 'right', paddingRight: 12 }}>Modified</span>
+                </div>
 
-                    {/* File Rows */}
-                    <div className="divide-y divide-[#f0ece6]">
-                        {items.map((item, index) => (
-                            <FileRow
-                                key={item.id}
-                                item={item}
-                                index={index}
-                                selected={selectedIds.has(item.id)}
-                                onSelect={(multi) => onSelect(item.id, multi)}
-                                onNavigate={() => onNavigate(item)}
-                            />
-                        ))}
-                    </div>
+                {/* File Rows */}
+                <div>
+                    {items.map((item, index) => (
+                        <FileRow
+                            key={item.id}
+                            item={item}
+                            index={index}
+                            selected={selectedIds.has(item.id)}
+                            onSelect={(multi) => onSelect(item.id, multi)}
+                            onNavigate={() => onNavigate(item)}
+                        />
+                    ))}
+                </div>
 
-                    {/* Empty State */}
-                    {items.length === 0 && (
-                        <EmptyState searchQuery={searchQuery} />
-                    )}
-                </motion.div>
-            ) : (
-                <motion.div
-                    key={currentPath + '-grid'}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="grid gap-4"
-                    style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}
-                >
+                {/* Empty State */}
+                {items.length === 0 && (
+                    <EmptyState searchQuery={searchQuery} />
+                )}
+            </div>
+        ) : (
+            <div
+                className="grid gap-2 p-2"
+                style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))' }}
+            >
+                <AnimatePresence mode="popLayout">
                     {items.map((item, index) => (
                         <FileCard
                             key={item.id}
@@ -77,15 +74,15 @@ const FileArea = ({
                             onNavigate={() => onNavigate(item)}
                         />
                     ))}
+                </AnimatePresence>
 
-                    {items.length === 0 && (
-                        <div className="col-span-full">
-                            <EmptyState searchQuery={searchQuery} />
-                        </div>
-                    )}
-                </motion.div>
-            )}
-        </AnimatePresence>
+                {items.length === 0 && (
+                    <div className="col-span-full">
+                        <EmptyState searchQuery={searchQuery} />
+                    </div>
+                )}
+            </div>
+        )}
     </div>
 );
 

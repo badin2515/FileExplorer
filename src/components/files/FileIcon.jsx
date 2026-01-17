@@ -4,11 +4,16 @@ import { Folder, FileText, Image as ImageIcon, Music, Video } from 'lucide-react
  * FileIcon Component
  * Displays appropriate icon based on file type and extension
  */
-const FileIcon = ({ type, name, size = 20 }) => {
+const FileIcon = ({ type, name, size = 20, variant = 'filled' }) => {
     const ext = name.split('.').pop().toLowerCase();
 
+    // Color tokens mapped to CSS variables or Tailwind classes
     const iconStyles = {
-        folder: { bg: 'bg-amber-100', icon: 'text-amber-600', fill: 'fill-amber-200' },
+        folder: {
+            bg: 'bg-amber-100',
+            icon: 'text-amber-500',
+            fill: 'fill-amber-400/20'
+        },
         image: { bg: 'bg-violet-100', icon: 'text-violet-500' },
         audio: { bg: 'bg-rose-100', icon: 'text-rose-500' },
         video: { bg: 'bg-red-100', icon: 'text-red-500' },
@@ -35,8 +40,23 @@ const FileIcon = ({ type, name, size = 20 }) => {
         style = iconStyles.pdf;
     }
 
+    if (variant === 'simple') {
+        return (
+            <div
+                className="flex items-center justify-center flex-shrink-0"
+                style={{ width: size + 4, height: size + 4 }}
+            >
+                <IconComponent
+                    className={`${style.icon} ${style.fill || ''}`}
+                    size={size}
+                    strokeWidth={1.5}
+                />
+            </div>
+        );
+    }
+
     return (
-        <div className={`p-2.5 ${style.bg} rounded-xl transition-transform duration-200`}>
+        <div className={`p-2.5 ${style.bg} rounded-xl flex items-center justify-center`}>
             <IconComponent
                 className={`${style.icon} ${style.fill || ''}`}
                 size={size}

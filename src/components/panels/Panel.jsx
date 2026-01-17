@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { motion } from 'framer-motion';
 import { ChevronRight, Search, Grid, List, RefreshCw, Loader2 } from 'lucide-react';
 import { FileArea } from '../files';
 import { useListDirectory } from '../../hooks/useTauri';
@@ -17,24 +16,26 @@ const Panel = ({
     isActive,
     onActivate,
     showBorder = false,
-    sourcePath = null // ถ้าเป็น null = local, ถ้าไม่ = remote device
+    sourcePath = null,
+    onPathChange = null // Callback เมื่อ path เปลี่ยน
 }) => {
     // Panel-specific state
-    const [currentPath, setCurrentPath] = useState(
-        sourcePath || (typeof window !== 'undefined' && window.__TAURI__
-            ? 'C:\\Users'
-            : 'root')
-    );
+    const [currentPath, setCurrentPath] = useState(sourcePath || 'C:\\Users');
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [searchQuery, setSearchQuery] = useState('');
     const [viewMode, setViewMode] = useState('list');
     const [breadcrumbs, setBreadcrumbs] = useState([]);
 
+    // Sync with parent's sourcePath
+    useEffect(() => {
+        if (sourcePath && sourcePath !== currentPath) {
+            setCurrentPath(sourcePath);
+            setSelectedIds(new Set());
+        }
+    }, [sourcePath]);
+
     // Use Tauri hook to list directory
     const { data, loading, error, refresh } = useListDirectory(currentPath);
-
-    // Check if running in Tauri
-    const isTauri = typeof window !== 'undefined' && window.__TAURI__;
 
     // Convert Tauri FileInfo to UI format
     const items = useMemo(() => {
@@ -85,6 +86,10 @@ const Panel = ({
         if (path === currentPath) return;
         setCurrentPath(path);
         setSelectedIds(new Set());
+        // Notify parent of path change
+        if (onPathChange) {
+            onPathChange(path);
+        }
     };
 
     const handleSelect = (id, multi) => {
@@ -109,44 +114,53 @@ const Panel = ({
     };
 
     return (
-        <motion.div
-            layout
-            initial={{ opacity: 0, scale: 0.95, x: panelId === 'right' ? 50 : 0 }}
-            animate={{ opacity: 1, scale: 1, x: 0 }}
-            exit={{ opacity: 0, scale: 0.95, x: 50 }}
-            transition={{
-                type: "spring",
-                stiffness: 300,
-                damping: 30,
-                opacity: { duration: 0.2 }
+        <div
+            className="flex-1 flex flex-col min-w-0 overflow-hidden"
+            style={{
+                backgroundColor: 'var(--bg-secondary)',
+                borderLeft: showBorder ? '1px solid var(--border-color)' : 'none',
+                boxShadow: isActive ? 'inset 0 0 0 2px var(--accent-light)' : 'none',
             }}
-            className={`
-                flex-1 flex flex-col min-w-0 overflow-hidden bg-white
-                ${showBorder ? 'border-l border-[#eae6e0]' : ''}
-                ${isActive ? 'ring-2 ring-[#d97352]/30 ring-inset' : ''}
-            `}
             onClick={onActivate}
         >
             {/* Panel Header */}
-            <header className="h-14 px-4 bg-white border-b border-[#eae6e0] flex items-center justify-between">
+            <header
+                className="h-14 px-4 flex items-center justify-between"
+                style={{
+                    backgroundColor: 'var(--bg-secondary)',
+                    borderBottom: '1px solid var(--border-color)'
+                }}
+            >
                 {/* Breadcrumbs */}
                 <nav className="flex items-center min-w-0 flex-1 overflow-x-auto">
                     {breadcrumbs.map((item, index) => (
                         <div key={item.id} className="flex items-center min-w-0 flex-shrink-0">
                             {index > 0 && (
-                                <ChevronRight size={14} className="mx-1 text-[#c4bfb6] flex-shrink-0" />
+                                <ChevronRight size={14} className="mx-1 flex-shrink-0" style={{ color: 'var(--text-faint)' }} />
                             )}
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     handleNavigate(item.id);
                                 }}
-                                className={`px-2 py-1 rounded-lg transition-all duration-200 text-xs truncate max-w-[120px]
-                                    ${index === breadcrumbs.length - 1
-                                        ? 'text-[#2d2a26] font-semibold bg-[#f5f3f0]'
-                                        : 'text-[#7a756e] hover:text-[#2d2a26] hover:bg-[#f5f3f0]'
+                                className="px-2 py-1 rounded-lg transition-all duration-200 text-xs truncate max-w-[120px]"
+                                style={{
+                                    backgroundColor: index === breadcrumbs.length - 1 ? 'var(--bg-tertiary)' : 'transparent',
+                                    color: index === breadcrumbs.length - 1 ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                                    fontWeight: index === breadcrumbs.length - 1 ? 600 : 400,
+                                }}
+                                onMouseOver={(e) => {
+                                    if (index !== breadcrumbs.length - 1) {
+                                        e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
+                                        e.currentTarget.style.color = 'var(--text-primary)';
                                     }
-                                `}
+                                }}
+                                onMouseOut={(e) => {
+                                    if (index !== breadcrumbs.length - 1) {
+                                        e.currentTarget.style.backgroundColor = 'transparent';
+                                        e.currentTarget.style.color = 'var(--text-tertiary)';
+                                    }
+                                }}
                                 title={item.id}
                             >
                                 {item.name}
@@ -160,23 +174,34 @@ const Panel = ({
                     {/* Refresh Button */}
                     <button
                         onClick={(e) => { e.stopPropagation(); refresh(); }}
-                        className="p-1.5 rounded-md text-[#9a958e] hover:text-[#d97352] hover:bg-[#f5f3f0] transition-all"
+                        className="p-1.5 rounded-md transition-all"
+                        style={{ color: 'var(--text-muted)' }}
                         disabled={loading}
                     >
                         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
                     </button>
 
                     {/* View Toggle */}
-                    <div className="flex bg-[#f5f3f0] rounded-lg p-0.5">
+                    <div className="flex rounded-lg p-0.5" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
                         <button
                             onClick={(e) => { e.stopPropagation(); setViewMode('list'); }}
-                            className={`p-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-[#d97352]' : 'text-[#9a958e]'}`}
+                            className="p-1.5 rounded-md transition-all"
+                            style={{
+                                backgroundColor: viewMode === 'list' ? 'var(--bg-secondary)' : 'transparent',
+                                color: viewMode === 'list' ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                boxShadow: viewMode === 'list' ? '0 1px 2px var(--shadow-color)' : 'none',
+                            }}
                         >
                             <List size={14} />
                         </button>
                         <button
                             onClick={(e) => { e.stopPropagation(); setViewMode('grid'); }}
-                            className={`p-1.5 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white shadow-sm text-[#d97352]' : 'text-[#9a958e]'}`}
+                            className="p-1.5 rounded-md transition-all"
+                            style={{
+                                backgroundColor: viewMode === 'grid' ? 'var(--bg-secondary)' : 'transparent',
+                                color: viewMode === 'grid' ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                boxShadow: viewMode === 'grid' ? '0 1px 2px var(--shadow-color)' : 'none',
+                            }}
                         >
                             <Grid size={14} />
                         </button>
@@ -185,33 +210,44 @@ const Panel = ({
             </header>
 
             {/* Panel Toolbar */}
-            <div className="px-4 py-2 bg-[#faf8f5] border-b border-[#eae6e0] flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <h3 className="text-sm font-bold text-[#2d2a26]">
+            <div
+                className="px-4 py-2 flex items-center justify-between gap-4"
+                style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    borderBottom: '1px solid var(--border-color)'
+                }}
+            >
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <h3
+                        className="text-sm font-bold truncate"
+                        style={{ color: 'var(--text-primary)' }}
+                        title={breadcrumbs[breadcrumbs.length - 1]?.name || 'Files'}
+                    >
                         {breadcrumbs[breadcrumbs.length - 1]?.name || 'Files'}
                     </h3>
-                    <span className="px-2 py-0.5 bg-[#eae6e0] rounded-full text-[10px] font-medium text-[#7a756e]">
+                    <span
+                        className="px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 whitespace-nowrap"
+                        style={{ backgroundColor: 'var(--bg-hover)', color: 'var(--text-tertiary)' }}
+                    >
                         {loading ? '...' : `${folderCount + fileCount} items`}
                     </span>
-                    {sourcePath && (
-                        <span className="px-2 py-0.5 bg-[#d97352]/10 text-[#d97352] rounded-full text-[10px] font-medium">
-                            Remote
-                        </span>
-                    )}
                 </div>
 
                 {/* Search */}
                 <div className="relative">
-                    <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-[#b5b0a8]" />
+                    <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-faint)' }} />
                     <input
                         type="text"
                         placeholder="Search..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onClick={(e) => e.stopPropagation()}
-                        className="pl-7 pr-3 py-1.5 bg-white border border-[#eae6e0] rounded-lg text-xs w-36
-                            focus:outline-none focus:border-[#d97352]
-                            transition-all duration-200 placeholder:text-[#b5b0a8]"
+                        className="pl-7 pr-3 py-1.5 rounded-lg text-xs w-36 focus:outline-none transition-all duration-200"
+                        style={{
+                            backgroundColor: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--text-primary)',
+                        }}
                     />
                 </div>
             </div>
@@ -254,7 +290,7 @@ const Panel = ({
                     onClearSelection={() => setSelectedIds(new Set())}
                 />
             )}
-        </motion.div>
+        </div>
     );
 };
 
