@@ -52,7 +52,7 @@ const FileArea = ({
                             item={item}
                             index={index}
                             selected={selectedIds.has(item.id)}
-                            onSelect={(multi) => onSelect(item.id, multi)}
+                            onSelect={(multi, range) => onSelect(item.id, multi, range)}
                             onNavigate={() => onNavigate(item)}
                             onContextMenu={onContextMenu}
                         />
@@ -76,7 +76,7 @@ const FileArea = ({
                             item={item}
                             index={index}
                             selected={selectedIds.has(item.id)}
-                            onSelect={(multi) => onSelect(item.id, multi)}
+                            onSelect={(multi, range) => onSelect(item.id, multi, range)}
                             onNavigate={() => onNavigate(item)}
                             onContextMenu={onContextMenu}
                         />

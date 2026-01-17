@@ -8,7 +8,7 @@ const FileCard = ({ item, index, selected, onSelect, onNavigate, onContextMenu }
     <div
         onClick={(e) => {
             e.stopPropagation();
-            onSelect(e.metaKey || e.ctrlKey);
+            onSelect(e.metaKey || e.ctrlKey, e.shiftKey);
         }}
         onDoubleClick={onNavigate}
         onContextMenu={(e) => {

@@ -85,21 +85,62 @@ const Panel = ({
     const folderCount = filteredItems.filter(i => i.type === 'folder').length;
     const fileCount = filteredItems.filter(i => i.type === 'file').length;
 
+    const [lastSelectedId, setLastSelectedId] = useState(null);
+
     // Handlers
     const handleNavigate = (path) => {
         if (path === currentPath) return;
         setCurrentPath(path);
         setSelectedIds(new Set());
+        setLastSelectedId(null);
         // Notify parent of path change
         if (onPathChange) {
             onPathChange(path);
         }
     };
 
-    const handleSelect = (id, multi) => {
-        const newSet = new Set(multi ? selectedIds : []);
-        if (newSet.has(id)) newSet.delete(id);
-        else newSet.add(id);
+    const handleSelect = (id, multi, range) => {
+        let newSet;
+
+        if (range && lastSelectedId) {
+            // Range Selection (Shift + Click)
+            const lastIndex = filteredItems.findIndex(i => i.id === lastSelectedId);
+            const currentIndex = filteredItems.findIndex(i => i.id === id);
+
+            if (lastIndex !== -1 && currentIndex !== -1) {
+                const start = Math.min(lastIndex, currentIndex);
+                const end = Math.max(lastIndex, currentIndex);
+
+                // Create selection from range
+                // Note: Standard Shift+Click usually replaces selection with the range
+                // unless Ctrl is also held. Here for simplicity, we'll replace selection with the range.
+                // If you want "Add to selection", use: newSet = new Set(selectedIds);
+                newSet = new Set();
+
+                for (let i = start; i <= end; i++) {
+                    newSet.add(filteredItems[i].id);
+                }
+            } else {
+                newSet = new Set([id]);
+                setLastSelectedId(id);
+            }
+        } else if (multi) {
+            // Multi Selection (Ctrl/Cmd + Click)
+            newSet = new Set(selectedIds);
+            if (newSet.has(id)) {
+                newSet.delete(id);
+                // If we deselect the anchor, we should probably update anchor to null or keep it?
+                // Often we keep it until a new active selection is made.
+            } else {
+                newSet.add(id);
+                setLastSelectedId(id);
+            }
+        } else {
+            // Single Selection
+            newSet = new Set([id]);
+            setLastSelectedId(id);
+        }
+
         setSelectedIds(newSet);
     };
 
@@ -140,20 +181,32 @@ const Panel = ({
     };
 
     // Actions
+    const getActionTargets = () => {
+        // If context menu triggered on an item
+        if (contextMenu?.item) {
+            // If the item is in the selection, act on the entire selection
+            if (selectedIds.has(contextMenu.item.id)) {
+                return items.filter(i => selectedIds.has(i.id));
+            }
+            // Otherwise act only on that item
+            return [contextMenu.item];
+        }
+        // Otherwise use selection
+        return items.filter(i => selectedIds.has(i.id));
+    };
+
     const performCopy = () => {
-        const targets = contextMenu?.item ? [contextMenu.item] : items.filter(i => selectedIds.has(i.id));
+        const targets = getActionTargets();
         if (targets.length > 0) copyItems(targets);
     };
 
     const performCut = () => {
-        const targets = contextMenu?.item ? [contextMenu.item] : items.filter(i => selectedIds.has(i.id));
+        const targets = getActionTargets();
         if (targets.length > 0) cutItems(targets);
     };
 
     const performDelete = () => {
-        const targets = contextMenu?.item
-            ? [contextMenu.item.id]
-            : Array.from(selectedIds);
+        const targets = getActionTargets().map(i => i.id);
 
         if (targets.length > 0) {
             setDialog({
