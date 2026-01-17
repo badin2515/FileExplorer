@@ -4,13 +4,21 @@ import FileIcon from './FileIcon';
  * FileCard Component
  * Compact icon view for grid mode
  */
-const FileCard = ({ item, index, selected, onSelect, onNavigate }) => (
+const FileCard = ({ item, index, selected, onSelect, onNavigate, onContextMenu }) => (
     <div
         onClick={(e) => {
             e.stopPropagation();
             onSelect(e.metaKey || e.ctrlKey);
         }}
         onDoubleClick={onNavigate}
+        onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!selected) {
+                onSelect(false);
+            }
+            if (onContextMenu) onContextMenu(e, item);
+        }}
         className="flex flex-col items-center p-2 cursor-pointer select-none rounded"
         style={{
             backgroundColor: selected ? 'var(--accent-light)' : 'transparent',

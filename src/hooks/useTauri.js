@@ -143,9 +143,9 @@ export async function createFolder(path, name) {
     }
 }
 
-export async function deleteItems(paths) {
+export async function deleteItems(paths, permanent = true) {
     try {
-        return await invoke('delete_items', { paths });
+        return await invoke('delete_items', { paths, permanent });
     } catch (e) {
         throw parseTauriError(e);
     }

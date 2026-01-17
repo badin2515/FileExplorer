@@ -1,7 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ChevronRight, Search, Grid, List, RefreshCw, Loader2 } from 'lucide-react';
+import { ChevronRight, Search, Grid, List, RefreshCw, Loader2, Copy, Trash2, Edit, Scissors, Play, Folder } from 'lucide-react';
 import { FileArea } from '../files';
-import { useListDirectory } from '../../hooks/useTauri';
+import { useListDirectory, createFolder, deleteItems, renameItem } from '../../hooks/useTauri';
+import { useClipboard } from '../../contexts/ClipboardContext';
+import ContextMenu from '../menus/ContextMenu';
+import { DialogModal } from '../modals';
+import { invoke } from '@tauri-apps/api/core';
 
 /**
  * Panel Component (Tauri Integrated)
@@ -105,6 +109,245 @@ const Panel = ({
         }
     };
 
+    // Clipboard & Context Menu
+    const [contextMenu, setContextMenu] = useState(null);
+    const { clipboard, copyItems, cutItems } = useClipboard();
+
+    const handleContextMenu = (e, targetItem) => {
+        // If clicking on an empty area, targetItem is null
+        // If clicking on an item that is NOT selected, select it exclusively
+        if (targetItem && !selectedIds.has(targetItem.id)) {
+            setSelectedIds(new Set([targetItem.id]));
+        }
+        setContextMenu({
+            position: { x: e.clientX, y: e.clientY },
+            item: targetItem
+        });
+    };
+
+    // Dialog State
+    const [dialog, setDialog] = useState({ isOpen: false });
+    const [isOperating, setIsOperating] = useState(false);
+
+    // Helper to wrap async operations with loading state
+    const runOperation = async (fn) => {
+        setIsOperating(true);
+        try {
+            await fn();
+        } finally {
+            setIsOperating(false);
+        }
+    };
+
+    // Actions
+    const performCopy = () => {
+        const targets = contextMenu?.item ? [contextMenu.item] : items.filter(i => selectedIds.has(i.id));
+        if (targets.length > 0) copyItems(targets);
+    };
+
+    const performCut = () => {
+        const targets = contextMenu?.item ? [contextMenu.item] : items.filter(i => selectedIds.has(i.id));
+        if (targets.length > 0) cutItems(targets);
+    };
+
+    const performDelete = () => {
+        const targets = contextMenu?.item
+            ? [contextMenu.item.id]
+            : Array.from(selectedIds);
+
+        if (targets.length > 0) {
+            setDialog({
+                isOpen: true,
+                type: 'confirm',
+                title: 'Delete Items',
+                message: `Are you sure you want to delete ${targets.length} item(s)? This action cannot be undone.`,
+                confirmLabel: 'Delete',
+                danger: true,
+                onConfirm: () => runOperation(async () => {
+                    try {
+                        await deleteItems(targets);
+                        refresh();
+                        setSelectedIds(new Set());
+                    } catch (e) {
+                        setDialog({
+                            isOpen: true,
+                            type: 'info',
+                            title: 'Error',
+                            message: `Failed to delete: ${e.message}`,
+                            confirmLabel: 'OK',
+                            onConfirm: () => { }
+                        });
+                    }
+                })
+            });
+        }
+    };
+
+    const performRename = () => {
+        const target = contextMenu?.item || (selectedIds.size === 1 ? items.find(i => i.id === Array.from(selectedIds)[0]) : null);
+        if (!target) return;
+
+        setDialog({
+            isOpen: true,
+            type: 'input',
+            title: 'Rename Item',
+            message: `Enter new name for "${target.name}":`,
+            initialValue: target.name,
+            confirmLabel: 'Rename',
+            onConfirm: (newName) => runOperation(async () => {
+                if (newName && newName !== target.name) {
+                    try {
+                        await renameItem(target.id, newName);
+                        refresh();
+                    } catch (e) {
+                        setDialog({
+                            isOpen: true,
+                            type: 'info',
+                            title: 'Error',
+                            message: `Rename failed: ${e.message}`,
+                            confirmLabel: 'Close',
+                            onConfirm: () => { }
+                        });
+                    }
+                }
+            })
+        });
+    };
+
+    const performNewFolder = () => {
+        setDialog({
+            isOpen: true,
+            type: 'input',
+            title: 'New Folder',
+            message: 'Enter folder name:',
+            initialValue: 'New Folder',
+            confirmLabel: 'Create',
+            onConfirm: (name) => runOperation(async () => {
+                if (name) {
+                    try {
+                        await createFolder(currentPath, name);
+                        refresh();
+                    } catch (e) {
+                        setDialog({
+                            isOpen: true,
+                            type: 'info',
+                            title: 'Error',
+                            message: `Create folder failed: ${e.message}`,
+                            confirmLabel: 'Close',
+                            onConfirm: () => { }
+                        });
+                    }
+                }
+            })
+        });
+    };
+
+    const performPaste = async () => {
+        if (!clipboard || !clipboard.items.length) return;
+
+        runOperation(async () => {
+            try {
+                const sourcePaths = clipboard.items.map(i => i.id);
+                if (clipboard.mode === 'copy') {
+                    await invoke('copy_items', { sourcePaths, targetFolder: currentPath });
+                } else {
+                    await invoke('move_items', { sourcePaths, targetFolder: currentPath });
+                    if (clipboard.mode === 'cut') {
+                        // Ideally clear clipboard or update UI
+                    }
+                }
+                refresh();
+            } catch (e) {
+                setDialog({
+                    isOpen: true,
+                    type: 'info',
+                    title: 'Paste Failed',
+                    message: e.message || String(e),
+                    confirmLabel: 'OK',
+                    onConfirm: () => { }
+                });
+            }
+        });
+    };
+
+    // Keyboard Shortcuts
+    useEffect(() => {
+        if (!isActive || dialog.isOpen || isOperating) return; // Disable shortcuts while operating
+
+        const handleKeyDown = (e) => {
+            // Shortcuts usually involve Ctrl/Cmd
+            if (e.ctrlKey || e.metaKey) {
+                switch (e.key.toLowerCase()) {
+                    case 'c':
+                        e.preventDefault();
+                        performCopy();
+                        break;
+                    case 'x':
+                        e.preventDefault();
+                        performCut();
+                        break;
+                    case 'v':
+                        e.preventDefault();
+                        performPaste();
+                        break;
+                    case 'a':
+                        e.preventDefault();
+                        // Select all logic
+                        if (items.length) {
+                            setSelectedIds(new Set(items.map(i => i.id)));
+                        }
+                        break;
+                }
+            } else {
+                // Navigation / Actions
+                if (e.key === 'Delete') {
+                    performDelete();
+                } else if (e.key === 'F2') {
+                    performRename();
+                } else if (e.key === 'Backspace') {
+                    handleGoUp();
+                } else if (e.key === 'Enter') {
+                    // Open selected item
+                    const selected = items.find(i => selectedIds.has(i.id));
+                    if (selected) handleItemClick(selected);
+                }
+                // Arrow keys are handled natively by focus, but for custom selection 
+                // we might need more logic. For now let's rely on click.
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isActive, dialog.isOpen, isOperating, selectedIds, items, clipboard, currentPath]);
+
+    const menuItems = useMemo(() => {
+        const hasSelection = contextMenu?.item || selectedIds.size > 0;
+        const canPaste = clipboard && clipboard.items.length > 0;
+
+        // Background Menu
+        if (!hasSelection && !contextMenu?.item) {
+            return [
+                { label: 'Refresh', icon: RefreshCw, onClick: refresh },
+                { separator: true },
+                { label: 'Paste', icon: Scissors, disabled: !canPaste, onClick: performPaste },
+                { separator: true },
+                { label: 'New Folder', icon: Folder, onClick: performNewFolder },
+            ];
+        }
+
+        // Item Menu
+        return [
+            { label: 'Open', icon: Play, onClick: () => contextMenu?.item && handleItemClick(contextMenu.item), disabled: !contextMenu?.item }, // TODO: Open Logic
+            { separator: true },
+            { label: 'Copy', icon: Copy, shortcut: 'Ctrl+C', onClick: performCopy },
+            { label: 'Cut', icon: Scissors, shortcut: 'Ctrl+X', onClick: performCut },
+            { label: 'Paste', icon: Scissors, disabled: !canPaste, onClick: performPaste }, // Paste into folder if folder selected? usually paste in current dir
+            { separator: true },
+            { label: 'Rename', icon: Edit, onClick: performRename },
+            { label: 'Delete', icon: Trash2, shortcut: 'Del', onClick: performDelete, danger: true },
+        ];
+    }, [contextMenu, selectedIds, clipboard, refresh, currentPath]); // Dependencies
+
     const handleGoUp = () => {
         const parts = currentPath.split(/[\\\/]/).filter(Boolean);
         if (parts.length > 1) {
@@ -115,7 +358,7 @@ const Panel = ({
 
     return (
         <div
-            className="flex-1 flex flex-col min-w-0 overflow-hidden"
+            className="flex-1 flex flex-col min-w-0 overflow-hidden relative" // Added relative for overlay
             style={{
                 backgroundColor: 'var(--bg-secondary)',
                 borderLeft: showBorder ? '1px solid var(--border-color)' : 'none',
@@ -176,9 +419,9 @@ const Panel = ({
                         onClick={(e) => { e.stopPropagation(); refresh(); }}
                         className="p-1.5 rounded-md transition-all"
                         style={{ color: 'var(--text-muted)' }}
-                        disabled={loading}
+                        disabled={loading || isOperating}
                     >
-                        <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                        <RefreshCw size={14} className={loading || isOperating ? 'animate-spin' : ''} />
                     </button>
 
                     {/* View Toggle */}
@@ -229,7 +472,7 @@ const Panel = ({
                         className="px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 whitespace-nowrap"
                         style={{ backgroundColor: 'var(--bg-hover)', color: 'var(--text-tertiary)' }}
                     >
-                        {loading ? '...' : `${folderCount + fileCount} items`}
+                        {loading || isOperating ? 'Working...' : `${folderCount + fileCount} items`}
                     </span>
                 </div>
 
@@ -309,7 +552,32 @@ const Panel = ({
                     onSelect={handleSelect}
                     onNavigate={handleItemClick}
                     onClearSelection={() => setSelectedIds(new Set())}
+                    onContextMenu={handleContextMenu}
                 />
+            )}
+            {/* Context Menu */}
+            {contextMenu && (
+                <ContextMenu
+                    position={contextMenu.position}
+                    items={menuItems}
+                    onClose={() => setContextMenu(null)}
+                />
+            )}
+            {/* Dialog Modal */}
+            <DialogModal
+                isOpen={dialog.isOpen}
+                onClose={() => setDialog({ ...dialog, isOpen: false })}
+                {...dialog}
+            />
+
+            {/* Operation Overlay */}
+            {isOperating && (
+                <div className="absolute inset-0 z-40 bg-white/50 dark:bg-black/50 backdrop-blur-[1px] flex flex-col items-center justify-center pointer-events-none">
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-2xl flex flex-col items-center gap-3">
+                        <Loader2 size={32} className="animate-spin text-[var(--accent-primary)]" />
+                        <span className="text-sm font-medium">Processing...</span>
+                    </div>
+                </div>
             )}
         </div>
     );

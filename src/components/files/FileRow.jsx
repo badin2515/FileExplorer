@@ -30,13 +30,22 @@ const formatDate = (item) => {
     }
 };
 
-const FileRow = ({ item, index, selected, onSelect, onNavigate }) => (
+const FileRow = ({ item, index, selected, onSelect, onNavigate, onContextMenu }) => (
     <div
         onClick={(e) => {
             e.stopPropagation();
             onSelect(e.metaKey || e.ctrlKey);
         }}
         onDoubleClick={onNavigate}
+        onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // Select item if not already selected
+            if (!selected) {
+                onSelect(false);
+            }
+            if (onContextMenu) onContextMenu(e, item);
+        }}
         className="group flex items-center px-3 py-1.5 cursor-pointer select-none"
         style={{
             backgroundColor: selected ? 'var(--accent-light)' : 'transparent',

@@ -16,12 +16,17 @@ const FileArea = ({
     onSelect,
     onNavigate,
     onClearSelection,
-    currentPath
+    currentPath,
+    onContextMenu // (e, item) => void
 }) => (
     <div
         className="flex-1 overflow-auto"
         style={{ backgroundColor: 'var(--bg-secondary)' }}
         onClick={onClearSelection}
+        onContextMenu={(e) => {
+            e.preventDefault();
+            if (onContextMenu) onContextMenu(e, null);
+        }}
     >
         {viewMode === 'list' ? (
             <div className="min-w-full">
@@ -49,6 +54,7 @@ const FileArea = ({
                             selected={selectedIds.has(item.id)}
                             onSelect={(multi) => onSelect(item.id, multi)}
                             onNavigate={() => onNavigate(item)}
+                            onContextMenu={onContextMenu}
                         />
                     ))}
                 </div>
@@ -72,6 +78,7 @@ const FileArea = ({
                             selected={selectedIds.has(item.id)}
                             onSelect={(multi) => onSelect(item.id, multi)}
                             onNavigate={() => onNavigate(item)}
+                            onContextMenu={onContextMenu}
                         />
                     ))}
                 </AnimatePresence>
