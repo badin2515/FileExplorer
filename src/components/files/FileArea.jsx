@@ -1,3 +1,4 @@
+import React, { forwardRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import FileRow from './FileRow';
 import FileCard from './FileCard';
@@ -6,9 +7,10 @@ import EmptyState from './EmptyState';
 /**
  * FileArea Component
  * Displays files in list or grid view
- * Optimized for mouse + keyboard navigation
+ * Optimized for mouse + keyboard navigation + drag/drop
+ * Uses forwardRef to allow parent to control scroll position
  */
-const FileArea = ({
+const FileArea = forwardRef(({
     items,
     viewMode,
     selectedIds,
@@ -18,9 +20,13 @@ const FileArea = ({
     onNavigate,
     onClearSelection,
     currentPath,
-    onContextMenu // (e, item) => void
-}) => (
+    onContextMenu, // (e, item) => void
+    onDragStart,   // (item, isSelected) => void
+    onDropOnItem,  // (targetPath, ctrlKey) => void
+    isDragging     // boolean
+}, ref) => (
     <div
+        ref={ref}
         className="flex-1 overflow-auto"
         style={{ backgroundColor: 'var(--bg-secondary)' }}
         onClick={onClearSelection}
@@ -57,6 +63,9 @@ const FileArea = ({
                             onSelect={(multi, range) => onSelect(item.id, multi, range)}
                             onNavigate={() => onNavigate(item)}
                             onContextMenu={onContextMenu}
+                            onDragStart={onDragStart}
+                            onDrop={onDropOnItem}
+                            isDragging={isDragging}
                         />
                     ))}
                 </div>
@@ -82,6 +91,9 @@ const FileArea = ({
                             onSelect={(multi, range) => onSelect(item.id, multi, range)}
                             onNavigate={() => onNavigate(item)}
                             onContextMenu={onContextMenu}
+                            onDragStart={onDragStart}
+                            onDrop={onDropOnItem}
+                            isDragging={isDragging}
                         />
                     ))}
                 </AnimatePresence>
@@ -94,6 +106,8 @@ const FileArea = ({
             </div>
         )}
     </div>
-);
+));
+
+FileArea.displayName = 'FileArea';
 
 export default FileArea;

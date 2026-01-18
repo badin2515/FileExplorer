@@ -348,26 +348,58 @@ fn md5_hash(s: &str) -> u64 {
     hasher.finish()
 }
 
+/// Progress event payload for file operations
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationProgress {
+    pub operation_id: String,
+    pub current_file: String,
+    pub current_index: usize,
+    pub total_files: usize,
+    pub bytes_copied: u64,
+    pub total_bytes: u64,
+}
 
 /// Copy files or folders to a destination
 #[command]
-pub async fn copy_items(source_paths: Vec<String>, target_folder: String) -> Result<(), AppError> {
+pub async fn copy_items(
+    app: tauri::AppHandle,
+    source_paths: Vec<String>,
+    target_folder: String,
+    operation_id: Option<String>
+) -> Result<(), AppError> {
+    use tauri::Emitter;
+    
     let target_dir = PathBuf::from(&target_folder);
     
     if !target_dir.exists() {
         return Err(AppError::NotFound(target_folder));
     }
     
-    for path_str in source_paths {
-        let source_path = PathBuf::from(&path_str);
+    let op_id = operation_id.unwrap_or_else(|| "unknown".to_string());
+    let total_files = source_paths.len();
+    
+    for (index, path_str) in source_paths.iter().enumerate() {
+        let source_path = PathBuf::from(path_str);
         if !source_path.exists() {
             continue; // Skip invalid paths
         }
         
         let file_name = source_path.file_name()
             .ok_or_else(|| AppError::PathInvalid("Invalid source path".into()))?;
+        let file_name_str = file_name.to_string_lossy().to_string();
             
         let dest_path = target_dir.join(file_name);
+        
+        // Emit progress event
+        let _ = app.emit("copy:progress", OperationProgress {
+            operation_id: op_id.clone(),
+            current_file: file_name_str,
+            current_index: index + 1,
+            total_files,
+            bytes_copied: 0,
+            total_bytes: 0,
+        });
         
         if source_path.is_dir() {
             copy_dir_recursive(&source_path, &dest_path)?;
@@ -381,23 +413,44 @@ pub async fn copy_items(source_paths: Vec<String>, target_folder: String) -> Res
 
 /// Move files or folders to a destination
 #[command]
-pub async fn move_items(source_paths: Vec<String>, target_folder: String) -> Result<(), AppError> {
+pub async fn move_items(
+    app: tauri::AppHandle,
+    source_paths: Vec<String>,
+    target_folder: String,
+    operation_id: Option<String>
+) -> Result<(), AppError> {
+    use tauri::Emitter;
+    
     let target_dir = PathBuf::from(&target_folder);
     
     if !target_dir.exists() {
         return Err(AppError::NotFound(target_folder));
     }
     
-    for path_str in source_paths {
-        let source_path = PathBuf::from(&path_str);
+    let op_id = operation_id.unwrap_or_else(|| "unknown".to_string());
+    let total_files = source_paths.len();
+    
+    for (index, path_str) in source_paths.iter().enumerate() {
+        let source_path = PathBuf::from(path_str);
         if !source_path.exists() {
             continue;
         }
         
         let file_name = source_path.file_name()
             .ok_or_else(|| AppError::PathInvalid("Invalid source path".into()))?;
+        let file_name_str = file_name.to_string_lossy().to_string();
             
         let dest_path = target_dir.join(file_name);
+        
+        // Emit progress event
+        let _ = app.emit("move:progress", OperationProgress {
+            operation_id: op_id.clone(),
+            current_file: file_name_str,
+            current_index: index + 1,
+            total_files,
+            bytes_copied: 0,
+            total_bytes: 0,
+        });
         
         // Try simple rename first (atomic move on same filesystem)
         if fs::rename(&source_path, &dest_path).is_err() {

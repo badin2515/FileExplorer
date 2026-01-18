@@ -3,6 +3,8 @@ import { ChevronRight, Search, Grid, List, RefreshCw, Loader2, Copy, Trash2, Edi
 import { FileArea } from '../files';
 import { useListDirectory, createFolder, deleteItems, renameItem } from '../../hooks/useTauri';
 import { useClipboard } from '../../contexts/ClipboardContext';
+import { useDrag } from '../../contexts/DragContext';
+import { useOperations } from '../../contexts/OperationContext';
 import ContextMenu from '../menus/ContextMenu';
 import { DialogModal } from '../modals';
 import { invoke } from '@tauri-apps/api/core';
@@ -40,6 +42,42 @@ const Panel = ({
 
     // Use Tauri hook to list directory
     const { data, loading, error, refresh } = useListDirectory(currentPath);
+
+    // Scroll preservation
+    const fileAreaRef = React.useRef(null);
+    const savedScrollRef = React.useRef({ top: 0, left: 0 });
+
+    // Save scroll position before refresh
+    const refreshWithScroll = React.useCallback(() => {
+        if (fileAreaRef.current) {
+            savedScrollRef.current = {
+                top: fileAreaRef.current.scrollTop,
+                left: fileAreaRef.current.scrollLeft
+            };
+        }
+        refresh();
+    }, [refresh]);
+
+    // Restore scroll position after data loads
+    useEffect(() => {
+        if (!loading && fileAreaRef.current && savedScrollRef.current) {
+            fileAreaRef.current.scrollTop = savedScrollRef.current.top;
+            fileAreaRef.current.scrollLeft = savedScrollRef.current.left;
+        }
+    }, [loading, data]);
+
+    // Subscribe to global refresh events (for cross-panel operations like drag & drop)
+    useEffect(() => {
+        const handleGlobalRefresh = (e) => {
+            // Refresh if our currentPath is in the list of paths to refresh
+            if (e.detail?.paths?.includes(currentPath)) {
+                refreshWithScroll();
+            }
+        };
+
+        window.addEventListener('panel-refresh', handleGlobalRefresh);
+        return () => window.removeEventListener('panel-refresh', handleGlobalRefresh);
+    }, [currentPath, refreshWithScroll]);
 
     // Convert Tauri FileInfo to UI format
     const items = useMemo(() => {
@@ -185,15 +223,29 @@ const Panel = ({
 
     // Dialog State
     const [dialog, setDialog] = useState({ isOpen: false });
-    const [isOperating, setIsOperating] = useState(false);
 
-    // Helper to wrap async operations with loading state
-    const runOperation = async (fn) => {
-        setIsOperating(true);
+    // Operation tracking (non-blocking)
+    const { addOperation, completeOperation, hasRunningOperations } = useOperations();
+    const isOperating = hasRunningOperations; // For UI feedback only, not blocking
+
+    // Helper to run async operations with progress tracking
+    // Supports both: runOperation(fn) and runOperation(type, sources, target, fn)
+    // fn receives (opId) as argument to pass to backend for progress tracking
+    const runOperation = async (typeOrFn, sources, target, fn) => {
+        // Backwards compatible: if first arg is function, run without tracking
+        if (typeof typeOrFn === 'function') {
+            await typeOrFn();
+            return;
+        }
+
+        // New style: with operation tracking
+        const opId = addOperation(typeOrFn, sources, target);
         try {
-            await fn();
-        } finally {
-            setIsOperating(false);
+            await fn(opId); // Pass opId to fn for backend tracking
+            completeOperation(opId);
+        } catch (err) {
+            completeOperation(opId, err.message || String(err));
+            throw err; // Re-throw for caller to handle
         }
     };
 
@@ -233,10 +285,12 @@ const Panel = ({
                 message: `Are you sure you want to delete ${targets.length} item(s)? This action cannot be undone.`,
                 confirmLabel: 'Delete',
                 danger: true,
-                onConfirm: () => runOperation(async () => {
+                onConfirm: async () => {
                     try {
-                        await deleteItems(targets);
-                        refresh();
+                        await runOperation('delete', targets, currentPath, async () => {
+                            await deleteItems(targets);
+                        });
+                        refreshWithScroll();
                         setSelectedIds(new Set());
                     } catch (e) {
                         setDialog({
@@ -248,7 +302,7 @@ const Panel = ({
                             onConfirm: () => { }
                         });
                     }
-                })
+                }
             });
         }
     };
@@ -315,29 +369,31 @@ const Panel = ({
     const performPaste = async () => {
         if (!clipboard || !clipboard.items.length) return;
 
-        runOperation(async () => {
-            try {
-                const sourcePaths = clipboard.items.map(i => i.id);
+        const sourcePaths = clipboard.items.map(i => i.id);
+        const opType = clipboard.mode === 'copy' ? 'copy' : 'move';
+
+        try {
+            await runOperation(opType, sourcePaths, currentPath, async (opId) => {
                 if (clipboard.mode === 'copy') {
-                    await invoke('copy_items', { sourcePaths, targetFolder: currentPath });
+                    await invoke('copy_items', { sourcePaths, targetFolder: currentPath, operationId: opId });
                 } else {
-                    await invoke('move_items', { sourcePaths, targetFolder: currentPath });
-                    if (clipboard.mode === 'cut') {
-                        // Ideally clear clipboard or update UI
-                    }
+                    await invoke('move_items', { sourcePaths, targetFolder: currentPath, operationId: opId });
                 }
-                refresh();
-            } catch (e) {
-                setDialog({
-                    isOpen: true,
-                    type: 'info',
-                    title: 'Paste Failed',
-                    message: e.message || String(e),
-                    confirmLabel: 'OK',
-                    onConfirm: () => { }
-                });
-            }
-        });
+            });
+            // Dispatch refresh for both source and destination
+            window.dispatchEvent(new CustomEvent('panel-refresh', {
+                detail: { paths: [currentPath] } // Source path is unknown from clipboard
+            }));
+        } catch (e) {
+            setDialog({
+                isOpen: true,
+                type: 'info',
+                title: 'Paste Failed',
+                message: e.message || String(e),
+                confirmLabel: 'OK',
+                onConfirm: () => { }
+            });
+        }
     };
 
     // Keyboard Shortcuts
@@ -432,15 +488,123 @@ const Panel = ({
         return new Set(clipboard.items.map(i => i.id));
     }, [clipboard]);
 
+    // ========== DRAG & DROP ==========
+    const { dragData, isDragging, startDrag, endDrag } = useDrag();
+    const [isDragOver, setIsDragOver] = useState(false);
+
+    // Start dragging from this panel
+    const handleDragStart = (item, isSelected) => {
+        // If item is selected, drag all selected items
+        // If item is not selected, drag just that item
+        const itemsToDrag = isSelected
+            ? items.filter(i => selectedIds.has(i.id))
+            : [item];
+
+        startDrag(itemsToDrag, currentPath);
+    };
+
+    // Drop on a folder item (inside this panel)
+    const handleDropOnItem = async (targetFolderPath, ctrlKey) => {
+        if (!dragData || dragData.items.length === 0) return;
+
+        // Don't drop on itself
+        const sourcePaths = dragData.items.map(i => i.id);
+        if (sourcePaths.includes(targetFolderPath)) return;
+
+        const opType = ctrlKey ? 'copy' : 'move';
+
+        try {
+            await runOperation(opType, sourcePaths, targetFolderPath, async (opId) => {
+                if (ctrlKey) {
+                    await invoke('copy_items', { sourcePaths, targetFolder: targetFolderPath, operationId: opId });
+                } else {
+                    await invoke('move_items', { sourcePaths, targetFolder: targetFolderPath, operationId: opId });
+                }
+            });
+            // Dispatch global refresh event for both source and destination
+            window.dispatchEvent(new CustomEvent('panel-refresh', {
+                detail: { paths: [dragData.sourcePath, targetFolderPath] }
+            }));
+            endDrag();
+        } catch (e) {
+            setDialog({
+                isOpen: true,
+                type: 'info',
+                title: 'Drop Failed',
+                message: e.message || String(e),
+                confirmLabel: 'OK',
+                onConfirm: () => { }
+            });
+            endDrag();
+        }
+    };
+
+    // Drop on panel background (current path)
+    const handlePanelDrop = async (e) => {
+        e.preventDefault();
+        setIsDragOver(false);
+
+        if (!dragData || dragData.items.length === 0) return;
+
+        // Don't drop if source is same folder
+        if (dragData.sourcePath === currentPath) return;
+
+        const sourcePaths = dragData.items.map(i => i.id);
+        const opType = e.ctrlKey ? 'copy' : 'move';
+
+        try {
+            await runOperation(opType, sourcePaths, currentPath, async (opId) => {
+                if (e.ctrlKey) {
+                    await invoke('copy_items', { sourcePaths, targetFolder: currentPath, operationId: opId });
+                } else {
+                    await invoke('move_items', { sourcePaths, targetFolder: currentPath, operationId: opId });
+                }
+            });
+            // Dispatch global refresh event for both source and destination
+            window.dispatchEvent(new CustomEvent('panel-refresh', {
+                detail: { paths: [dragData.sourcePath, currentPath] }
+            }));
+            endDrag();
+        } catch (err) {
+            setDialog({
+                isOpen: true,
+                type: 'info',
+                title: 'Drop Failed',
+                message: err.message || String(err),
+                confirmLabel: 'OK',
+                onConfirm: () => { }
+            });
+            endDrag();
+        }
+    };
+
+    const handlePanelDragOver = (e) => {
+        e.preventDefault();
+        if (dragData && dragData.sourcePath !== currentPath) {
+            e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+            setIsDragOver(true);
+        }
+    };
+
+    const handlePanelDragLeave = (e) => {
+        // Only set false if leaving the panel entirely
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+            setIsDragOver(false);
+        }
+    };
+
     return (
         <div
-            className="flex-1 flex flex-col min-w-0 overflow-hidden relative" // Added relative for overlay
+            className={`flex-1 flex flex-col min-w-0 overflow-hidden relative transition-all duration-150 ${isDragOver ? 'ring-2 ring-inset ring-[var(--accent-primary)]' : ''}`}
             style={{
-                backgroundColor: 'var(--bg-secondary)',
+                backgroundColor: isDragOver ? 'var(--accent-light)' : 'var(--bg-secondary)',
                 borderLeft: showBorder ? '1px solid var(--border-color)' : 'none',
                 boxShadow: isActive ? 'inset 0 0 0 2px var(--accent-light)' : 'none',
             }}
             onClick={onActivate}
+            onDragOver={handlePanelDragOver}
+            onDragLeave={handlePanelDragLeave}
+            onDrop={handlePanelDrop}
         >
             {/* ... Header & Toolbar code omitted for brevity ... */}
             {/* Panel Header and Toolbar are above this, keep them unchanged */}
@@ -623,16 +787,20 @@ const Panel = ({
                 </div>
             ) : (
                 <FileArea
+                    ref={fileAreaRef}
                     items={filteredItems}
                     viewMode={viewMode}
                     selectedIds={selectedIds}
-                    cutIds={cutIds} // Pass cutIds to FileArea
+                    cutIds={cutIds}
                     searchQuery={searchQuery}
                     currentPath={currentPath}
                     onSelect={handleSelect}
                     onNavigate={handleItemClick}
                     onClearSelection={() => setSelectedIds(new Set())}
                     onContextMenu={handleContextMenu}
+                    onDragStart={handleDragStart}
+                    onDropOnItem={handleDropOnItem}
+                    isDragging={isDragging}
                 />
             )}
             {/* Context Menu */}
@@ -650,15 +818,7 @@ const Panel = ({
                 {...dialog}
             />
 
-            {/* Operation Overlay */}
-            {isOperating && (
-                <div className="absolute inset-0 z-40 bg-white/50 dark:bg-black/50 backdrop-blur-[1px] flex flex-col items-center justify-center pointer-events-none">
-                    <div className="bg-white dark:bg-gray-800 p-4 rounded-xl shadow-2xl flex flex-col items-center gap-3">
-                        <Loader2 size={32} className="animate-spin text-[var(--accent-primary)]" />
-                        <span className="text-sm font-medium">Processing...</span>
-                    </div>
-                </div>
-            )}
+            {/* Note: Operation progress is now shown in global OperationBar instead of blocking overlay */}
         </div>
     );
 };
