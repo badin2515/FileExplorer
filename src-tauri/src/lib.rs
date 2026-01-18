@@ -44,7 +44,7 @@ mod chaos_tests;
 use commands::{
     // Filesystem commands
     list_directory, get_file_info, create_folder, delete_items, rename_item, get_storage_volumes,
-    copy_items, move_items,
+    copy_items, move_items, cancel_operation,
     
     // Device commands (identity + discovery)
     start_discovery, stop_discovery, get_discovered_devices, add_device_manually,
@@ -101,7 +101,8 @@ pub fn run() {
             rename_item,
             get_storage_volumes,
             copy_items,
-            move_items,            
+            move_items,
+            cancel_operation,            
             
             // ═══════════════════════════════════════
             // Device (identity + discovery)

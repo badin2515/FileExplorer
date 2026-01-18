@@ -97,14 +97,14 @@ const FileRow = ({
             onDrop={handleDrop}
             onClick={(e) => {
                 e.stopPropagation();
-                onSelect(e.metaKey || e.ctrlKey, e.shiftKey);
+                onSelect(item.id, e.metaKey || e.ctrlKey, e.shiftKey);
             }}
-            onDoubleClick={onNavigate}
+            onDoubleClick={() => onNavigate(item)}
             onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 if (!selected) {
-                    onSelect(false);
+                    onSelect(item.id, false);
                 }
                 if (onContextMenu) onContextMenu(e, item);
             }}

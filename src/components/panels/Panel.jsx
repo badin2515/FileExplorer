@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ChevronRight, Search, Grid, List, RefreshCw, Loader2, Copy, Trash2, Edit, Scissors, Play, Folder } from 'lucide-react';
+import { ChevronRight, Search, Grid, List, RefreshCw, Loader2, Copy, Trash2, Edit, Scissors, Play, Folder, X } from 'lucide-react';
 import { FileArea } from '../files';
 import { useListDirectory, createFolder, deleteItems, renameItem } from '../../hooks/useTauri';
 import { useClipboard } from '../../contexts/ClipboardContext';
@@ -163,16 +163,57 @@ const Panel = ({
                 const start = Math.min(anchorIndex, currentIndex);
                 const end = Math.max(anchorIndex, currentIndex);
 
-                if (multi) {
-                    // Ctrl + Shift + Click: Add range to existing selection
+                if (start === end && multi) {
                     newSet = new Set(selectedIds);
+                    if (newSet.has(id)) {
+                        newSet.delete(id);
+                    } else {
+                        newSet.add(id);
+                    }
                 } else {
-                    // Shift + Click: Replace selection with range
-                    newSet = new Set();
-                }
+                    // Range Logic
+                    if (multi) {
+                        // Ctrl + Shift + Click: Modify existing range (Extend or Shrink)
+                        newSet = new Set(selectedIds);
 
-                for (let i = start; i <= end; i++) {
-                    newSet.add(filteredItems[i].id);
+                        // 1. Ensure the NEW range (Anchor..Current) is selected
+                        const startRange = Math.min(anchorIndex, currentIndex);
+                        const endRange = Math.max(anchorIndex, currentIndex);
+                        for (let i = startRange; i <= endRange; i++) {
+                            newSet.add(filteredItems[i].id);
+                        }
+
+                        // 2. Trim the 'Tail' (shrink behavior)
+                        // If we clicked strictly inside an existing selection, we need to deselect items 
+                        // that are "beyond" the current click (away from anchor).
+
+                        // Determine direction from Anchor -> Current
+                        const direction = currentIndex >= anchorIndex ? 1 : -1;
+
+                        // Start scanning immediately after the current click
+                        let scanIndex = currentIndex + direction;
+
+                        // Scan and remove contiguous selected items
+                        while (scanIndex >= 0 && scanIndex < filteredItems.length) {
+                            const targetId = filteredItems[scanIndex].id;
+
+                            // If we hit an unselected item, stop (end of this group)
+                            if (!newSet.has(targetId)) break;
+
+                            // If we hit a selected item, deselect it (it's the tail we want to trim)
+                            // BUT careful: if we are executing this logic, we are assuming the user wants to set the boundary HERE.
+                            // So anything contiguous beyond here should be removed.
+                            newSet.delete(targetId);
+
+                            scanIndex += direction;
+                        }
+                    } else {
+                        // Shift + Click: Replace selection with range (Standard)
+                        newSet = new Set();
+                        for (let i = start; i <= end; i++) {
+                            newSet.add(filteredItems[i].id);
+                        }
+                    }
                 }
             } else {
                 // Fallback
@@ -380,19 +421,32 @@ const Panel = ({
                     await invoke('move_items', { sourcePaths, targetFolder: currentPath, operationId: opId });
                 }
             });
-            // Dispatch refresh for both source and destination
-            window.dispatchEvent(new CustomEvent('panel-refresh', {
-                detail: { paths: [currentPath] } // Source path is unknown from clipboard
-            }));
         } catch (e) {
-            setDialog({
-                isOpen: true,
-                type: 'info',
-                title: 'Paste Failed',
-                message: e.message || String(e),
-                confirmLabel: 'OK',
-                onConfirm: () => { }
-            });
+            // Ignore cancellation errors
+            if (e.message?.includes('cancelled') || String(e).includes('cancelled')) {
+                // Do nothing
+            } else {
+                setDialog({
+                    isOpen: true,
+                    type: 'info',
+                    title: 'Paste Failed',
+                    message: e.message || String(e),
+                    confirmLabel: 'OK',
+                    onConfirm: () => { }
+                });
+            }
+        } finally {
+            // Always dispatch refresh
+            window.dispatchEvent(new CustomEvent('panel-refresh', {
+                detail: { paths: [currentPath] }
+            }));
+        }
+    };
+
+    const handleClearSelection = () => {
+        if (selectedIds.size > 0) {
+            setSelectedIds(new Set());
+            setLastSelectedId(null);
         }
     };
 
@@ -401,6 +455,14 @@ const Panel = ({
         if (!isActive || dialog.isOpen || isOperating) return; // Disable shortcuts while operating
 
         const handleKeyDown = (e) => {
+            // Escape to clear selection
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                handleClearSelection();
+                return;
+            }
+
+
             // Shortcuts usually involve Ctrl/Cmd
             if (e.ctrlKey || e.metaKey) {
                 switch (e.key.toLowerCase()) {
@@ -437,14 +499,14 @@ const Panel = ({
                     const selected = items.find(i => selectedIds.has(i.id));
                     if (selected) handleItemClick(selected);
                 }
-                // Arrow keys are handled natively by focus, but for custom selection 
+                // Arrow keys are handled natively by focus, but for custom selection
                 // we might need more logic. For now let's rely on click.
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isActive, dialog.isOpen, isOperating, selectedIds, items, clipboard, currentPath]);
+    }, [isActive, dialog.isOpen, isOperating, selectedIds, items, clipboard, currentPath, handleClearSelection]);
 
     const menuItems = useMemo(() => {
         const hasSelection = contextMenu?.item || selectedIds.size > 0;
@@ -521,20 +583,24 @@ const Panel = ({
                     await invoke('move_items', { sourcePaths, targetFolder: targetFolderPath, operationId: opId });
                 }
             });
+        } catch (e) {
+            if (e.message?.includes('cancelled') || String(e).includes('cancelled')) {
+                // Do nothing for cancellation
+            } else {
+                setDialog({
+                    isOpen: true,
+                    type: 'info',
+                    title: 'Drop Failed',
+                    message: e.message || String(e),
+                    confirmLabel: 'OK',
+                    onConfirm: () => { }
+                });
+            }
+        } finally {
             // Dispatch global refresh event for both source and destination
             window.dispatchEvent(new CustomEvent('panel-refresh', {
                 detail: { paths: [dragData.sourcePath, targetFolderPath] }
             }));
-            endDrag();
-        } catch (e) {
-            setDialog({
-                isOpen: true,
-                type: 'info',
-                title: 'Drop Failed',
-                message: e.message || String(e),
-                confirmLabel: 'OK',
-                onConfirm: () => { }
-            });
             endDrag();
         }
     };
@@ -560,20 +626,24 @@ const Panel = ({
                     await invoke('move_items', { sourcePaths, targetFolder: currentPath, operationId: opId });
                 }
             });
+        } catch (err) {
+            if (err.message?.includes('cancelled') || String(err).includes('cancelled')) {
+                // Do nothing for cancellation
+            } else {
+                setDialog({
+                    isOpen: true,
+                    type: 'info',
+                    title: 'Drop Failed',
+                    message: err.message || String(err),
+                    confirmLabel: 'OK',
+                    onConfirm: () => { }
+                });
+            }
+        } finally {
             // Dispatch global refresh event for both source and destination
             window.dispatchEvent(new CustomEvent('panel-refresh', {
                 detail: { paths: [dragData.sourcePath, currentPath] }
             }));
-            endDrag();
-        } catch (err) {
-            setDialog({
-                isOpen: true,
-                type: 'info',
-                title: 'Drop Failed',
-                message: err.message || String(err),
-                confirmLabel: 'OK',
-                onConfirm: () => { }
-            });
             endDrag();
         }
     };
@@ -593,6 +663,40 @@ const Panel = ({
         }
     };
 
+    // Format bytes helper
+    const formatBytes = (bytes) => {
+        if (bytes === 0) return '0 B';
+        if (!bytes) return null;
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+    };
+
+    // Calculate selection stats
+    const selectionStats = useMemo(() => {
+        if (selectedIds.size === 0) return null;
+
+        const selectedItems = items.filter(i => selectedIds.has(i.id));
+        const count = selectedItems.length;
+        let totalBytes = 0;
+        let fileCount = 0;
+
+        selectedItems.forEach(item => {
+            if (item.type === 'file' && typeof item.size === 'number') {
+                totalBytes += item.size;
+                fileCount++;
+            } else if (item.type === 'file' && typeof item.size === 'string' && !isNaN(Number(item.size))) {
+                totalBytes += Number(item.size);
+                fileCount++;
+            }
+            // Directories usually have size 0 or null, so we ignore or count as 0
+        });
+
+        // Only show size if we have files selected
+        return { count, totalBytes, hasFiles: fileCount > 0 };
+    }, [selectedIds, items]);
+
     return (
         <div
             className={`flex-1 flex flex-col min-w-0 overflow-hidden relative transition-all duration-150 ${isDragOver ? 'ring-2 ring-inset ring-[var(--accent-primary)]' : ''}`}
@@ -601,7 +705,13 @@ const Panel = ({
                 borderLeft: showBorder ? '1px solid var(--border-color)' : 'none',
                 boxShadow: isActive ? 'inset 0 0 0 2px var(--accent-light)' : 'none',
             }}
-            onClick={onActivate}
+            onClick={(e) => {
+                onActivate(e);
+                // Click on background clears selection (unless target is within an item logic which stops propagation)
+                if (e.target === e.currentTarget) {
+                    handleClearSelection();
+                }
+            }}
             onDragOver={handlePanelDragOver}
             onDragLeave={handlePanelDragLeave}
             onDrop={handlePanelDrop}
@@ -609,16 +719,20 @@ const Panel = ({
             {/* ... Header & Toolbar code omitted for brevity ... */}
             {/* Panel Header and Toolbar are above this, keep them unchanged */}
 
-            {/* Panel Header */}
+            {/* Panel Header - Clicking background clears selection */}
             <header
-                className="h-14 px-4 flex items-center justify-between"
+                className="h-14 px-4 flex items-center justify-between cursor-default"
                 style={{
                     backgroundColor: 'var(--bg-secondary)',
                     borderBottom: '1px solid var(--border-color)'
                 }}
+                onClick={(e) => {
+                    // Ensure clicking header background clears selection
+                    if (e.target === e.currentTarget) handleClearSelection();
+                }}
             >
                 {/* Breadcrumbs */}
-                <nav className="flex items-center min-w-0 flex-1 overflow-x-auto">
+                <nav className="flex items-center min-w-0 flex-1 overflow-x-auto" onClick={handleClearSelection}>
                     {breadcrumbs.map((item, index) => (
                         <div key={item.id} className="flex items-center min-w-0 flex-shrink-0">
                             {index > 0 && (
@@ -695,15 +809,18 @@ const Panel = ({
                 </div>
             </header>
 
-            {/* Panel Toolbar */}
+            {/* Panel Toolbar - Clicking background clears selection */}
             <div
-                className="px-4 py-2 flex items-center justify-between gap-4"
+                className="px-4 py-2 flex items-center justify-between gap-4 cursor-default"
                 style={{
                     backgroundColor: 'var(--bg-tertiary)',
                     borderBottom: '1px solid var(--border-color)'
                 }}
+                onClick={(e) => {
+                    if (e.target === e.currentTarget) handleClearSelection();
+                }}
             >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="flex items-center gap-3 min-w-0 flex-1" onClick={handleClearSelection}>
                     <h3
                         className="text-sm font-bold truncate"
                         style={{ color: 'var(--text-primary)' }}
@@ -711,12 +828,37 @@ const Panel = ({
                     >
                         {breadcrumbs[breadcrumbs.length - 1]?.name || 'Files'}
                     </h3>
-                    <span
-                        className="px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 whitespace-nowrap"
+
+                    {/* Status Pill with Clear Button */}
+                    <div
+                        className="px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 whitespace-nowrap flex items-center gap-1.5 transition-colors"
                         style={{ backgroundColor: 'var(--bg-hover)', color: 'var(--text-tertiary)' }}
+                        onClick={(e) => e.stopPropagation()} // Stop propagation to prevent immediate clear then... wait, clicking pill shouldn't do anything unless it's the clear button
                     >
-                        {loading || isOperating ? 'Working...' : `${folderCount + fileCount} items`}
-                    </span>
+                        <span>
+                            {loading || isOperating
+                                ? 'Working...'
+                                : (selectionStats
+                                    ? `${selectionStats.count} selected${selectionStats.hasFiles ? ` (${formatBytes(selectionStats.totalBytes)})` : ''}`
+                                    : `${folderCount + fileCount} items`
+                                )
+                            }
+                        </span>
+
+                        {/* Clear Selection Button (New) */}
+                        {selectionStats && (
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleClearSelection();
+                                }}
+                                className="p-0.5 rounded-full hover:bg-black/20 dark:hover:bg-white/20 transition-colors"
+                                title="Clear selection (Esc)"
+                            >
+                                <X size={10} />
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 {/* Search */}

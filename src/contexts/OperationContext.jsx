@@ -6,6 +6,8 @@ import { listen } from '@tauri-apps/api/event';
  * 
  * Manages global file operations queue with progress tracking
  * Subscribes to Tauri events for real-time progress updates
+ * 
+ * Now includes: bytes_copied, total_bytes, elapsed_ms for speed/ETA calculation
  */
 
 const OperationContext = createContext(null);
@@ -23,7 +25,7 @@ let operationIdCounter = 0;
 const generateId = () => `op_${++operationIdCounter}_${Date.now()}`;
 
 export const OperationProvider = ({ children }) => {
-    // Operations queue: { id, type, source[], target, status, progress?, currentFile?, error? }
+    // Operations queue with extended fields for speed/ETA
     const [operations, setOperations] = useState([]);
 
     // Add a new operation to the queue
@@ -39,6 +41,9 @@ export const OperationProvider = ({ children }) => {
             currentFile: null,
             currentIndex: 0,
             totalFiles: sources?.length || 0,
+            bytesCopied: 0,
+            totalBytes: 0,
+            elapsedMs: 0,
             error: null,
             startTime: Date.now()
         };
@@ -66,11 +71,17 @@ export const OperationProvider = ({ children }) => {
             } : op
         ));
 
-        // Auto-remove successful operations after 3 seconds
-        if (!error) {
+        // Check if error is actually a cancellation
+        const isCancelled = error && (
+            (typeof error === 'string' && error.toLowerCase().includes('cancelled')) ||
+            (error.message && error.message.toLowerCase().includes('cancelled'))
+        );
+
+        // Auto-remove successful operations (3s) OR cancelled operations (2s)
+        if (!error || isCancelled) {
             setTimeout(() => {
                 setOperations(prev => prev.filter(op => op.id !== id));
-            }, 3000);
+            }, isCancelled ? 2000 : 3000);
         }
     }, []);
 
@@ -88,51 +99,43 @@ export const OperationProvider = ({ children }) => {
     useEffect(() => {
         const unlisteners = [];
 
+        // Helper to process progress event
+        const processProgress = (payload) => {
+            if (!payload?.operationId) return;
+
+            // Calculate progress from bytes if available, fallback to file count
+            let progress = 0;
+            if (payload.totalBytes > 0) {
+                progress = Math.round((payload.bytesCopied / payload.totalBytes) * 100);
+            } else if (payload.totalFiles > 0) {
+                progress = Math.round((payload.currentIndex / payload.totalFiles) * 100);
+            }
+
+            setOperations(prev => prev.map(op => {
+                if (op.id === payload.operationId) {
+                    return {
+                        ...op,
+                        progress,
+                        currentFile: payload.currentFile,
+                        currentIndex: payload.currentIndex,
+                        totalFiles: payload.totalFiles,
+                        bytesCopied: payload.bytesCopied || 0,
+                        totalBytes: payload.totalBytes || 0,
+                        elapsedMs: payload.elapsedMs || 0
+                    };
+                }
+                return op;
+            }));
+        };
+
         // Listen to copy:progress
         listen('copy:progress', (event) => {
-            const payload = event.payload;
-            if (payload?.operationId) {
-                const progress = payload.totalFiles > 0
-                    ? Math.round((payload.currentIndex / payload.totalFiles) * 100)
-                    : 0;
-
-                setOperations(prev => prev.map(op => {
-                    // Match by operation_id
-                    if (op.id === payload.operationId) {
-                        return {
-                            ...op,
-                            progress,
-                            currentFile: payload.currentFile,
-                            currentIndex: payload.currentIndex,
-                            totalFiles: payload.totalFiles
-                        };
-                    }
-                    return op;
-                }));
-            }
+            processProgress(event.payload);
         }).then(unlisten => unlisteners.push(unlisten));
 
         // Listen to move:progress
         listen('move:progress', (event) => {
-            const payload = event.payload;
-            if (payload?.operationId) {
-                const progress = payload.totalFiles > 0
-                    ? Math.round((payload.currentIndex / payload.totalFiles) * 100)
-                    : 0;
-
-                setOperations(prev => prev.map(op => {
-                    if (op.id === payload.operationId) {
-                        return {
-                            ...op,
-                            progress,
-                            currentFile: payload.currentFile,
-                            currentIndex: payload.currentIndex,
-                            totalFiles: payload.totalFiles
-                        };
-                    }
-                    return op;
-                }));
-            }
+            processProgress(event.payload);
         }).then(unlisten => unlisteners.push(unlisten));
 
         return () => {

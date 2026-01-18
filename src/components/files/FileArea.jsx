@@ -60,8 +60,8 @@ const FileArea = forwardRef(({
                             index={index}
                             selected={selectedIds.has(item.id)}
                             isCut={cutIds?.has(item.id)}
-                            onSelect={(multi, range) => onSelect(item.id, multi, range)}
-                            onNavigate={() => onNavigate(item)}
+                            onSelect={onSelect}
+                            onNavigate={onNavigate}
                             onContextMenu={onContextMenu}
                             onDragStart={onDragStart}
                             onDrop={onDropOnItem}
@@ -88,8 +88,8 @@ const FileArea = forwardRef(({
                             index={index}
                             selected={selectedIds.has(item.id)}
                             isCut={cutIds?.has(item.id)}
-                            onSelect={(multi, range) => onSelect(item.id, multi, range)}
-                            onNavigate={() => onNavigate(item)}
+                            onSelect={onSelect}
+                            onNavigate={onNavigate}
                             onContextMenu={onContextMenu}
                             onDragStart={onDragStart}
                             onDrop={onDropOnItem}

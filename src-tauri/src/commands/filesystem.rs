@@ -6,8 +6,15 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::collections::HashSet;
 use tauri::command;
 use crate::error::AppError;
+
+// Global cancellation tokens - stores operation IDs that should be cancelled
+lazy_static::lazy_static! {
+    static ref CANCELLED_OPERATIONS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+}
 
 /// File or folder information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +365,113 @@ pub struct OperationProgress {
     pub total_files: usize,
     pub bytes_copied: u64,
     pub total_bytes: u64,
+    pub elapsed_ms: u64,
+}
+
+// Helper: Calculate total size of a path (file or directory)
+fn calculate_path_size(path: &Path) -> u64 {
+    if path.is_file() {
+        path.metadata().map(|m| m.len()).unwrap_or(0)
+    } else if path.is_dir() {
+        let mut total = 0u64;
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                total += calculate_path_size(&entry.path());
+            }
+        }
+        total
+    } else {
+        0
+    }
+}
+
+// Helper: Check if operation is cancelled
+fn is_cancelled(operation_id: &str) -> bool {
+    if let Ok(cancelled) = CANCELLED_OPERATIONS.lock() {
+        cancelled.contains(operation_id)
+    } else {
+        false
+    }
+}
+
+// Helper: Mark operation as cancelled
+fn mark_cancelled(operation_id: &str) {
+    if let Ok(mut cancelled) = CANCELLED_OPERATIONS.lock() {
+        cancelled.insert(operation_id.to_string());
+    }
+}
+
+// Helper: Clear cancellation flag (after operation completes)
+fn clear_cancelled(operation_id: &str) {
+    if let Ok(mut cancelled) = CANCELLED_OPERATIONS.lock() {
+        cancelled.remove(operation_id);
+    }
+}
+
+/// Streaming copy with progress callback
+/// Copies file in chunks and calls callback with bytes copied so far
+fn copy_file_with_progress<F>(
+    src: &Path,
+    dst: &Path,
+    operation_id: &str,
+    mut on_progress: F
+) -> Result<u64, AppError>
+where
+    F: FnMut(u64) // callback receives bytes_copied so far for this file
+{
+    use std::io::{Read, Write, BufReader, BufWriter};
+    
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1 MB chunks
+    
+    let src_file = fs::File::open(src).map_err(AppError::Io)?;
+    let dst_file = fs::File::create(dst).map_err(AppError::Io)?;
+    
+    let file_size = src.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut reader = BufReader::with_capacity(CHUNK_SIZE, src_file);
+    let mut writer = BufWriter::with_capacity(CHUNK_SIZE, dst_file);
+    
+    let mut buffer = vec![0u8; CHUNK_SIZE];
+    let mut total_copied = 0u64;
+    
+    loop {
+        // Check cancellation
+        if is_cancelled(operation_id) {
+            // Clean up partial file
+            let _ = fs::remove_file(dst);
+            return Err(AppError::Cancelled("Operation cancelled by user".to_string()));
+        }
+        
+        let bytes_read = reader.read(&mut buffer).map_err(AppError::Io)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        writer.write_all(&buffer[..bytes_read]).map_err(AppError::Io)?;
+        total_copied += bytes_read as u64;
+        
+        // Call progress callback
+        on_progress(total_copied);
+    }
+    
+    writer.flush().map_err(AppError::Io)?;
+    
+    // Preserve permissions (optional)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = src.metadata() {
+            let _ = fs::set_permissions(dst, meta.permissions());
+        }
+    }
+    
+    Ok(file_size)
+}
+
+/// Cancel an ongoing operation
+#[command]
+pub async fn cancel_operation(operation_id: String) -> Result<(), AppError> {
+    mark_cancelled(&operation_id);
+    Ok(())
 }
 
 /// Copy files or folders to a destination
@@ -369,6 +483,9 @@ pub async fn copy_items(
     operation_id: Option<String>
 ) -> Result<(), AppError> {
     use tauri::Emitter;
+    use std::time::Instant;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
     
     let target_dir = PathBuf::from(&target_folder);
     
@@ -379,7 +496,23 @@ pub async fn copy_items(
     let op_id = operation_id.unwrap_or_else(|| "unknown".to_string());
     let total_files = source_paths.len();
     
+    // Calculate total bytes upfront
+    let total_bytes: u64 = source_paths.iter()
+        .map(|p| calculate_path_size(Path::new(p)))
+        .sum();
+    
+    let start_time = Instant::now();
+    let bytes_copied = Arc::new(AtomicU64::new(0));
+    let mut last_emit = Instant::now();
+    const EMIT_INTERVAL_MS: u128 = 100; // Emit at most every 100ms
+    
     for (index, path_str) in source_paths.iter().enumerate() {
+        // Check for cancellation before each file
+        if is_cancelled(&op_id) {
+            clear_cancelled(&op_id);
+            return Err(AppError::Cancelled("Operation cancelled by user".to_string()));
+        }
+        
         let source_path = PathBuf::from(path_str);
         if !source_path.exists() {
             continue; // Skip invalid paths
@@ -388,26 +521,70 @@ pub async fn copy_items(
         let file_name = source_path.file_name()
             .ok_or_else(|| AppError::PathInvalid("Invalid source path".into()))?;
         let file_name_str = file_name.to_string_lossy().to_string();
+        let file_size = calculate_path_size(&source_path);
             
         let dest_path = target_dir.join(file_name);
         
-        // Emit progress event
-        let _ = app.emit("copy:progress", OperationProgress {
-            operation_id: op_id.clone(),
-            current_file: file_name_str,
-            current_index: index + 1,
-            total_files,
-            bytes_copied: 0,
-            total_bytes: 0,
-        });
+        // Clone for closure
+        let app_clone = app.clone();
+        let op_id_clone = op_id.clone();
+        let file_name_for_emit = file_name_str.clone();
+        let bytes_copied_clone = Arc::clone(&bytes_copied);
+        let start_bytes = bytes_copied.load(Ordering::Relaxed);
         
         if source_path.is_dir() {
+            // For directories, use recursive copy (less granular progress)
+            // Emit before
+            let elapsed = start_time.elapsed().as_millis() as u64;
+            let _ = app.emit("copy:progress", OperationProgress {
+                operation_id: op_id.clone(),
+                current_file: file_name_str.clone(),
+                current_index: index + 1,
+                total_files,
+                bytes_copied: bytes_copied.load(Ordering::Relaxed),
+                total_bytes,
+                elapsed_ms: elapsed,
+            });
             copy_dir_recursive(&source_path, &dest_path)?;
+            bytes_copied.fetch_add(file_size, Ordering::Relaxed);
         } else {
-            fs::copy(&source_path, &dest_path).map_err(AppError::Io)?;
+            // For files, use streaming copy with progress callback
+            copy_file_with_progress(&source_path, &dest_path, &op_id, |chunk_bytes| {
+                let current_total = start_bytes + chunk_bytes;
+                bytes_copied_clone.store(current_total, Ordering::Relaxed);
+                
+                // Emit progress at intervals to avoid overwhelming the event system
+                let now = Instant::now();
+                if now.duration_since(last_emit).as_millis() >= EMIT_INTERVAL_MS {
+                    let elapsed = start_time.elapsed().as_millis() as u64;
+                    let _ = app_clone.emit("copy:progress", OperationProgress {
+                        operation_id: op_id_clone.clone(),
+                        current_file: file_name_for_emit.clone(),
+                        current_index: index + 1,
+                        total_files,
+                        bytes_copied: current_total,
+                        total_bytes,
+                        elapsed_ms: elapsed,
+                    });
+                }
+            })?;
         }
     }
     
+    // Emit final progress
+    let elapsed = start_time.elapsed().as_millis() as u64;
+    let _ = app.emit("copy:progress", OperationProgress {
+        operation_id: op_id.clone(),
+        current_file: "".to_string(),
+        current_index: total_files,
+        total_files,
+        bytes_copied: total_bytes,
+        total_bytes,
+        elapsed_ms: elapsed,
+    });
+    
+    // Clear cancellation flag if it was set during completion
+    clear_cancelled(&op_id);
     Ok(())
 }
 
@@ -420,6 +597,7 @@ pub async fn move_items(
     operation_id: Option<String>
 ) -> Result<(), AppError> {
     use tauri::Emitter;
+    use std::time::Instant;
     
     let target_dir = PathBuf::from(&target_folder);
     
@@ -430,7 +608,21 @@ pub async fn move_items(
     let op_id = operation_id.unwrap_or_else(|| "unknown".to_string());
     let total_files = source_paths.len();
     
+    // Calculate total bytes upfront
+    let total_bytes: u64 = source_paths.iter()
+        .map(|p| calculate_path_size(Path::new(p)))
+        .sum();
+    
+    let start_time = Instant::now();
+    let mut bytes_copied: u64 = 0;
+    
     for (index, path_str) in source_paths.iter().enumerate() {
+        // Check for cancellation before each file
+        if is_cancelled(&op_id) {
+            clear_cancelled(&op_id);
+            return Err(AppError::Cancelled("Operation cancelled by user".to_string()));
+        }
+        
         let source_path = PathBuf::from(path_str);
         if !source_path.exists() {
             continue;
@@ -439,17 +631,20 @@ pub async fn move_items(
         let file_name = source_path.file_name()
             .ok_or_else(|| AppError::PathInvalid("Invalid source path".into()))?;
         let file_name_str = file_name.to_string_lossy().to_string();
+        let file_size = calculate_path_size(&source_path);
             
         let dest_path = target_dir.join(file_name);
         
         // Emit progress event
+        let elapsed = start_time.elapsed().as_millis() as u64;
         let _ = app.emit("move:progress", OperationProgress {
             operation_id: op_id.clone(),
             current_file: file_name_str,
             current_index: index + 1,
             total_files,
-            bytes_copied: 0,
-            total_bytes: 0,
+            bytes_copied,
+            total_bytes,
+            elapsed_ms: elapsed,
         });
         
         // Try simple rename first (atomic move on same filesystem)
@@ -463,8 +658,25 @@ pub async fn move_items(
                 fs::remove_file(&source_path).map_err(AppError::Io)?;
             }
         }
+        
+        // Update bytes after this file
+        bytes_copied += file_size;
     }
     
+    // Emit final progress
+    let elapsed = start_time.elapsed().as_millis() as u64;
+    let _ = app.emit("move:progress", OperationProgress {
+        operation_id: op_id.clone(),
+        current_file: "".to_string(),
+        current_index: total_files,
+        total_files,
+        bytes_copied: total_bytes,
+        total_bytes,
+        elapsed_ms: elapsed,
+    });
+    
+    // Clear cancellation flag
+    clear_cancelled(&op_id);
     Ok(())
 }
 

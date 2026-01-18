@@ -106,8 +106,8 @@ pub enum AppError {
     #[error("Invalid state: {0}")]
     InvalidState(String),
     
-    #[error("Operation cancelled")]
-    Cancelled,
+    #[error("Operation cancelled: {0}")]
+    Cancelled(String),
 
     // ═══════════════════════════════════════
     // Generic
@@ -139,7 +139,7 @@ impl AppError {
             AppError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => ErrorKind::NotFound,
             
             // Cancelled
-            AppError::Cancelled => ErrorKind::Cancelled,
+            AppError::Cancelled(_) => ErrorKind::Cancelled,
             
             // InvalidState
             AppError::InvalidState(_) => ErrorKind::InvalidState,
@@ -195,7 +195,7 @@ impl Serialize for AppError {
             AppError::Transfer(_) => "TRANSFER_ERROR",
             AppError::ChecksumMismatch => "CHECKSUM_MISMATCH",
             AppError::InvalidState(_) => "INVALID_STATE",
-            AppError::Cancelled => "CANCELLED",
+            AppError::Cancelled(_) => "CANCELLED",
             AppError::Unknown(_) => "UNKNOWN_ERROR",
         };
         
